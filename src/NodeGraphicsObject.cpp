@@ -258,6 +258,44 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                 constexpr int kIconSize = 16;
                 QRectF const iconRect(nodeSize.width(), -kIconSize, kIconSize, kIconSize);
                 if (iconRect.contains(event->pos())) {
+                    // Right-click: copy the raw validation message to the
+                    // clipboard and flash a brief confirmation popup.
+                    if (event->button() == Qt::RightButton) {
+                        QGuiApplication::clipboard()->setText(state._stateMessage);
+
+                        auto *toast = new ValidationPopupLabel();
+                        toast->setAttribute(Qt::WA_DeleteOnClose);
+                        toast->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint
+                                              | Qt::WindowStaysOnTopHint);
+                        toast->setMargin(6);
+                        toast->setStyleSheet(QStringLiteral(
+                            "QLabel {"
+                            "  background: #2b2b2b;"
+                            "  color: #e8e8e8;"
+                            "  border: 1px solid #3498db;"
+                            "  padding: 4px 8px;"
+                            "  font-size: 11px;"
+                            "}"));
+                        toast->setText(QStringLiteral("Copied to clipboard"));
+                        toast->adjustSize();
+                        QPoint toastPos;
+                        if (auto *view = (scene() && !scene()->views().isEmpty())
+                                              ? scene()->views().first()
+                                              : nullptr) {
+                            toastPos = view->viewport()->mapToGlobal(
+                                view->mapFromScene(event->scenePos()));
+                        } else {
+                            toastPos = QCursor::pos();
+                        }
+                        toast->move(toastPos + QPoint(8, 8));
+                        toast->show();
+                        // Auto-dismiss after 1.2s even if no outside click.
+                        QTimer::singleShot(1200, toast, &QWidget::close);
+
+                        event->accept();
+                        return;
+                    }
+
                     QString const label = (state._state == NodeValidationState::State::Error)
                                               ? QStringLiteral("<b>Error:</b> ")
                                               : QStringLiteral("<b>Warning:</b> ");
