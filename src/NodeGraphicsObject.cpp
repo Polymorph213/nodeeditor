@@ -203,6 +203,45 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
     AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
 
+    // --- Validation icon click ----------------------------------------------
+    // The icon is drawn by DefaultNodePainter::drawValidationIcon at the
+    // top-right of the node, straddling the corner:
+    //   topLeft = (size.width(), -iconSize.height())  (local coords)
+    //   size    = iconSize x iconSize (16x16)
+    // A click inside that rect pops up a QToolTip showing the full validation
+    // message so users can read why a node is in a warning/error state.
+    {
+        QVariant var = _graphModel.nodeData(_nodeId, NodeRole::ValidationState);
+        if (var.canConvert<NodeValidationState>()) {
+            auto state = var.value<NodeValidationState>();
+            if (state._state != NodeValidationState::State::Valid
+                && !state._stateMessage.isEmpty()) {
+                QSize const nodeSize = geometry.size(_nodeId);
+                constexpr int kIconSize = 16;
+                QRectF const iconRect(nodeSize.width(), -kIconSize, kIconSize, kIconSize);
+                if (iconRect.contains(event->pos())) {
+                    QString const label = (state._state == NodeValidationState::State::Error)
+                                              ? QStringLiteral("<b>Error:</b> ")
+                                              : QStringLiteral("<b>Warning:</b> ");
+                    if (auto *view = (scene() && !scene()->views().isEmpty())
+                                          ? scene()->views().first()
+                                          : nullptr) {
+                        QPoint const globalPos = view->viewport()->mapToGlobal(
+                            view->mapFromScene(event->scenePos()));
+                        QToolTip::showText(globalPos,
+                                           label + state._stateMessage.toHtmlEscaped(),
+                                           view->viewport());
+                    } else {
+                        QToolTip::showText(QCursor::pos(),
+                                           label + state._stateMessage.toHtmlEscaped());
+                    }
+                    event->accept();
+                    return;
+                }
+            }
+        }
+    }
+
     for (PortType portToCheck : {PortType::In, PortType::Out}) {
         QPointF nodeCoord = sceneTransform().inverted().map(event->scenePos());
 

@@ -59,29 +59,35 @@ void DefaultNodePainter::drawNodeRect(QPainter *painter, NodeGraphicsObject &ngo
     NodeStyle nodeStyle(json.object());
 
     QVariant var = model.nodeData(nodeId, NodeRole::ValidationState);
-    bool invalid = false;
 
     QColor color = ngo.isSelected() ? nodeStyle.SelectedBoundaryColor
                                     : nodeStyle.NormalBoundaryColor;
 
+    // Validation state tints only the BORDER, never the node body. The body
+    // keeps its normal gradient so the node remains readable even when in a
+    // warning / error state — the coloured outline + top-right icon are the
+    // only visual affordances.
+    qreal validationPenWidth = -1.0;
     if (var.canConvert<NodeValidationState>()) {
         auto state = var.value<NodeValidationState>();
         switch (state._state) {
-        case NodeValidationState::State::Error: {
-            invalid = true;
+        case NodeValidationState::State::Error:
             color = nodeStyle.ErrorColor;
-        } break;
-        case NodeValidationState::State::Warning: {
-            invalid = true;
+            validationPenWidth = nodeStyle.HoveredPenWidth; // slightly thicker
+            break;
+        case NodeValidationState::State::Warning:
             color = nodeStyle.WarningColor;
+            validationPenWidth = nodeStyle.HoveredPenWidth;
             break;
         default:
             break;
         }
-        }
     }
 
-    if (ngo.nodeState().hovered()) {
+    if (validationPenWidth > 0.0) {
+        QPen p(color, validationPenWidth);
+        painter->setPen(p);
+    } else if (ngo.nodeState().hovered()) {
         QPen p(color, nodeStyle.HoveredPenWidth);
         painter->setPen(p);
     } else {
@@ -89,9 +95,7 @@ void DefaultNodePainter::drawNodeRect(QPainter *painter, NodeGraphicsObject &ngo
         painter->setPen(p);
     }
 
-    if (invalid) {
-        painter->setBrush(color);
-    } else {
+    {
         QLinearGradient gradient(QPointF(0.0, 0.0), QPointF(2.0, size.height()));
         gradient.setColorAt(0.0, nodeStyle.GradientColor0);
         gradient.setColorAt(0.10, nodeStyle.GradientColor1);
