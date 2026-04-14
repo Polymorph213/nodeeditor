@@ -381,7 +381,11 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
 
     ProcessingIconStyle const &iconStyle = delegate->nodeStyle().processingIconStyle;
 
-    qreal iconSize = iconStyle._size;
+    // CICADA change: use a larger corner icon than the default
+    // processing-status glyph size. The node-identity icon is a primary
+    // affordance, so we give it ~2x the original footprint.
+    constexpr qreal kCicadaNodeIconSize = 40.0;
+    qreal iconSize = kCicadaNodeIconSize;
     qreal margin = iconStyle._margin;
 
     // Determine position, avoiding conflict with resize handle
