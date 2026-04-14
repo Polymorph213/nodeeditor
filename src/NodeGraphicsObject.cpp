@@ -53,7 +53,18 @@ protected:
     }
 };
 
+/// Flag set by mousePressEvent when a right-click on a validation icon is
+/// handled; consumed by the host app's context-menu filter.
+static bool s_pendingValidationRightClick = false;
+
 } // namespace
+
+bool NodeGraphicsObject::consumePendingValidationRightClick()
+{
+    bool const v = s_pendingValidationRightClick;
+    s_pendingValidationRightClick = false;
+    return v;
+}
 
 NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
     : _nodeId(nodeId)
@@ -261,6 +272,9 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                     // Right-click: copy the raw validation message to the
                     // clipboard and flash a brief confirmation popup.
                     if (event->button() == Qt::RightButton) {
+                        // Tell the host app's context-menu filter to skip
+                        // its menu for this right-click.
+                        s_pendingValidationRightClick = true;
                         QGuiApplication::clipboard()->setText(state._stateMessage);
 
                         auto *toast = new ValidationPopupLabel();

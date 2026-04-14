@@ -78,6 +78,13 @@ public:
     /// Getter for the NodeGroup object.
     std::weak_ptr<NodeGroup> nodeGroup() const { return _nodeGroup; }
 
+    /// CICADA: returns true if the most recent right-click landed on a
+    /// validation icon (top-right of a node) and was handled by this
+    /// class (copied message to clipboard). Host applications should
+    /// call this from their context-menu event filter and skip showing
+    /// their menu when it returns true. Calling this clears the flag.
+    static bool consumePendingValidationRightClick();
+
 protected:
     void paint(QPainter *painter,
                QStyleOptionGraphicsItem const *option,
