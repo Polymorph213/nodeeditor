@@ -19,6 +19,42 @@
 
 namespace QtNodes {
 
+namespace {
+
+/// QLabel subclass used as the persistent validation-message popup.
+/// Auto-closes itself when the user clicks anywhere outside its own
+/// geometry, by installing an application-wide event filter on qApp
+/// that watches for MouseButtonPress events.
+class ValidationPopupLabel : public QLabel
+{
+public:
+    ValidationPopupLabel() : QLabel(nullptr)
+    {
+        if (qApp) qApp->installEventFilter(this);
+    }
+    ~ValidationPopupLabel() override
+    {
+        if (qApp) qApp->removeEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::MouseButtonPress
+            || event->type() == QEvent::NonClientAreaMouseButtonPress) {
+            auto *w = qobject_cast<QWidget *>(watched);
+            // Close if the press did NOT land on this label itself.
+            if (!w || (w != this && !this->isAncestorOf(w))) {
+                // Defer close to avoid deleting ourselves mid event dispatch.
+                QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
+            }
+        }
+        return QLabel::eventFilter(watched, event);
+    }
+};
+
+} // namespace
+
 NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
     : _nodeId(nodeId)
     , _graphModel(scene.graphModel())
@@ -226,10 +262,10 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                                               ? QStringLiteral("<b>Error:</b> ")
                                               : QStringLiteral("<b>Warning:</b> ");
 
-                    auto *popup = new QLabel(nullptr);
+                    auto *popup = new ValidationPopupLabel();
                     popup->setAttribute(Qt::WA_DeleteOnClose);
-                    popup->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint
-                                          | Qt::NoDropShadowWindowHint);
+                    popup->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint
+                                          | Qt::WindowStaysOnTopHint);
                     popup->setTextFormat(Qt::RichText);
                     popup->setWordWrap(true);
                     popup->setMargin(8);
