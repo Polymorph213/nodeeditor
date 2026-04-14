@@ -122,6 +122,13 @@ public:
 
     void setStatusIconStyle(ProcessingIconStyle const &style);
 
+    /// Optional per-node icon drawn in the bottom-right corner by
+    /// DefaultNodePainter::drawProcessingStatusIcon. Returns an empty pixmap
+    /// by default; subclasses override to provide a custom icon. Host
+    /// applications (e.g. CICADA) use this to show a node-category icon in
+    /// place of the default processing-status icon.
+    virtual QPixmap nodeIcon() const { return QPixmap(); }
+
     void setProgressValue(QString new_progress) { _progressValue = new_progress; }
 
 public:

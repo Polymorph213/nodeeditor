@@ -208,8 +208,10 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
     // top-right of the node, straddling the corner:
     //   topLeft = (size.width(), -iconSize.height())  (local coords)
     //   size    = iconSize x iconSize (16x16)
-    // A click inside that rect pops up a QToolTip showing the full validation
-    // message so users can read why a node is in a warning/error state.
+    // A click inside that rect pops up a small persistent QLabel showing the
+    // full validation message. The popup uses Qt::Popup so it auto-dismisses
+    // when the user clicks anywhere outside it — a QToolTip cannot be used
+    // because it is killed by the mouse release that immediately follows.
     {
         QVariant var = _graphModel.nodeData(_nodeId, NodeRole::ValidationState);
         if (var.canConvert<NodeValidationState>()) {
@@ -223,18 +225,44 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                     QString const label = (state._state == NodeValidationState::State::Error)
                                               ? QStringLiteral("<b>Error:</b> ")
                                               : QStringLiteral("<b>Warning:</b> ");
+
+                    auto *popup = new QLabel(nullptr);
+                    popup->setAttribute(Qt::WA_DeleteOnClose);
+                    popup->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint
+                                          | Qt::NoDropShadowWindowHint);
+                    popup->setTextFormat(Qt::RichText);
+                    popup->setWordWrap(true);
+                    popup->setMargin(8);
+                    popup->setMaximumWidth(360);
+                    popup->setTextInteractionFlags(Qt::TextSelectableByMouse);
+                    QString const borderCol = (state._state == NodeValidationState::State::Error)
+                                                  ? QStringLiteral("#c0392b")
+                                                  : QStringLiteral("#e67e22");
+                    popup->setStyleSheet(
+                        QStringLiteral("QLabel {"
+                                       "  background: #2b2b2b;"
+                                       "  color: #e8e8e8;"
+                                       "  border: 1px solid %1;"
+                                       "  padding: 6px 8px;"
+                                       "  font-size: 11px;"
+                                       "}")
+                            .arg(borderCol));
+                    popup->setText(label + state._stateMessage.toHtmlEscaped());
+                    popup->adjustSize();
+
+                    QPoint globalPos;
                     if (auto *view = (scene() && !scene()->views().isEmpty())
                                           ? scene()->views().first()
                                           : nullptr) {
-                        QPoint const globalPos = view->viewport()->mapToGlobal(
+                        globalPos = view->viewport()->mapToGlobal(
                             view->mapFromScene(event->scenePos()));
-                        QToolTip::showText(globalPos,
-                                           label + state._stateMessage.toHtmlEscaped(),
-                                           view->viewport());
                     } else {
-                        QToolTip::showText(QCursor::pos(),
-                                           label + state._stateMessage.toHtmlEscaped());
+                        globalPos = QCursor::pos();
                     }
+                    // Offset slightly so cursor isn't on top of the popup.
+                    popup->move(globalPos + QPoint(8, 8));
+                    popup->show();
+
                     event->accept();
                     return;
                 }

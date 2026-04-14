@@ -366,17 +366,18 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
     if (!delegate)
         return;
 
-    // Skip if status is NoStatus
-    if (delegate->processingStatus() == NodeProcessingStatus::NoStatus)
+    // CICADA change: show the node's own icon in the bottom-right corner
+    // instead of the processing-status icon (spinning gears, error marks,
+    // etc.). The processing status is already conveyed by the validation
+    // border colour + top-right validation icon — the bottom corner is a
+    // better home for a category-identifying glyph.
+    QPixmap pixmap = delegate->nodeIcon();
+    if (pixmap.isNull())
         return;
 
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
     QSize size = geometry.size(nodeId);
-
-    QPixmap pixmap = delegate->processingStatusIcon();
-    if (pixmap.isNull())
-        return;
 
     ProcessingIconStyle const &iconStyle = delegate->nodeStyle().processingIconStyle;
 
@@ -396,7 +397,10 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
     }
 
     QRect r(x, size.height() - iconSize - margin, iconSize, iconSize);
-    painter->drawPixmap(r, pixmap);
+    painter->drawPixmap(r,
+                        pixmap.scaled(r.size(),
+                                      Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation));
 }
 
 void DefaultNodePainter::drawValidationIcon(QPainter *painter, NodeGraphicsObject &ngo) const
