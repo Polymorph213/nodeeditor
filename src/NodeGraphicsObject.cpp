@@ -236,6 +236,15 @@ QVariant NodeGraphicsObject::itemChange(GraphicsItemChange change, const QVarian
 {
     if (change == ItemScenePositionHasChanged && scene()) {
         moveConnections();
+        // Sync drag-induced position changes back to the graph model.
+        // Without this, the model's `_nodeGeometryData[id].pos` only ever
+        // reflects the initial layout position assigned at node creation;
+        // any user drag is lost the next time `saveNode()` reads
+        // `NodeRole::Position`. setNodeData is idempotent for an unchanged
+        // value, so the QGraphicsItem ↔ model round-trip terminates without
+        // recursion. Uses the existing ItemSendsScenePositionChanges flag
+        // (set in NodeGraphicsObject's ctor) — no other flag changes needed.
+        _graphModel.setNodeData(_nodeId, NodeRole::Position, pos());
     }
 
     return QGraphicsObject::itemChange(change, value);
