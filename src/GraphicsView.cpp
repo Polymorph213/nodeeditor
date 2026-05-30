@@ -48,6 +48,11 @@ GraphicsView::GraphicsView(QWidget *parent)
     // mousePressEvent / mouseMoveEvent below). Default-disable the
     // hand-cursor because RubberBandDrag draws the selection rect.
     setDragMode(QGraphicsView::RubberBandDrag);
+    // Suppress Qt's automatic contextMenuEvent on right-press — it
+    // would fire mid-drag and conflict with the right-drag pan.
+    // mouseReleaseEvent invokes contextMenuEvent manually when the
+    // right-click released without crossing the pan threshold.
+    setContextMenuPolicy(Qt::PreventContextMenu);
     setRenderHint(QPainter::Antialiasing);
 
     auto const &flowViewStyle = StyleCollection::flowViewStyle();
@@ -512,12 +517,14 @@ void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
         _rightDragged = false;
         event->accept();
         if (!wasDrag) {
-            // No drag → treat as a normal right-click and let the
-            // canvas context menu fire via contextMenuEvent.
+            // No drag → treat as a normal right-click and invoke OUR
+            // overridden contextMenuEvent (which is the one that
+            // actually builds and exec()s the canvas menu — the base
+            // QGraphicsView::contextMenuEvent is a no-op fallback).
             QContextMenuEvent cme(QContextMenuEvent::Mouse,
                                   event->pos(),
                                   event->globalPosition().toPoint());
-            QGraphicsView::contextMenuEvent(&cme);
+            contextMenuEvent(&cme);
         }
         return;
     }
