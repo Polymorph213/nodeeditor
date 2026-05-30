@@ -513,19 +513,11 @@ void GraphicsView::mouseMoveEvent(QMouseEvent *event)
 void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::RightButton) {
-        bool wasDrag = _rightDragged;
+        // CICADA mouse model: right-button is reserved for panning.
+        // A quick right-click (no drag) does NOT pop a context menu —
+        // the user accesses node-search via double-click instead.
         _rightDragged = false;
         event->accept();
-        if (!wasDrag) {
-            // No drag → treat as a normal right-click and invoke OUR
-            // overridden contextMenuEvent (which is the one that
-            // actually builds and exec()s the canvas menu — the base
-            // QGraphicsView::contextMenuEvent is a no-op fallback).
-            QContextMenuEvent cme(QContextMenuEvent::Mouse,
-                                  event->pos(),
-                                  event->globalPosition().toPoint());
-            contextMenuEvent(&cme);
-        }
         return;
     }
     QGraphicsView::mouseReleaseEvent(event);
