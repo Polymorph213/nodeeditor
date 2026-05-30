@@ -9,6 +9,12 @@
 
 #include <QtGui/QIcon>
 
+// CICADA: semantic wire-color palette (red=Number, blue=String, ...,
+// white=mixed). Replaces the QtNodes hash-seeded color when the
+// CICADA palette returns a valid color; falls back to the default
+// hash color otherwise.
+#include "cicada/ui/WireColors.h"
+
 namespace QtNodes {
 
 QPainterPath DefaultConnectionPainter::cubicPath(ConnectionGraphicsObject const &connection) const
@@ -95,7 +101,7 @@ void DefaultConnectionPainter::drawNormalLine(QPainter *painter,
 
     AbstractGraphModel const &graphModel = cgo.graphModel();
 
-    if (connectionStyle.useDataDefinedColors()) {
+    {
         using QtNodes::PortType;
 
         auto const cId = cgo.connectionId();
@@ -107,15 +113,42 @@ void DefaultConnectionPainter::drawNormalLine(QPainter *painter,
                                          PortRole::DataType)
                                .value<NodeDataType>();
 
-        auto dataTypeIn
-            = graphModel.portData(cId.inNodeId, PortType::In, cId.inPortIndex, PortRole::DataType)
-                  .value<NodeDataType>();
+        // CICADA: wire color is always the output's. Fetch the source
+        // data ptr so wireColorFor() can inspect TypedListData
+        // homogeneity at the variant level. PanelNode and other
+        // CICADA wires now show in semantic colors instead of QtNodes'
+        // hash-seeded random palette.
+        auto sourceData = graphModel
+                              .portData(cId.outNodeId,
+                                        PortType::Out,
+                                        cId.outPortIndex,
+                                        PortRole::Data)
+                              .value<std::shared_ptr<NodeData>>();
 
-        useGradientColor = (dataTypeOut.id != dataTypeIn.id);
+        QColor cicadaColor = cicada::ui::wireColorFor(dataTypeOut, sourceData);
+        if (cicadaColor.isValid()) {
+            // Single color across the whole wire — matches user's
+            // intent: "the wire color is always the output."
+            useGradientColor = false;
+            normalColorOut = cicadaColor;
+            normalColorIn = cicadaColor;
+            selectedColor = cicadaColor.darker(200);
+        } else if (connectionStyle.useDataDefinedColors()) {
+            // Fall back to QtNodes' hash-seeded palette only when the
+            // CICADA palette can't classify the type.
+            auto dataTypeIn = graphModel
+                                  .portData(cId.inNodeId,
+                                            PortType::In,
+                                            cId.inPortIndex,
+                                            PortRole::DataType)
+                                  .value<NodeDataType>();
 
-        normalColorOut = connectionStyle.normalColor(dataTypeOut.id);
-        normalColorIn = connectionStyle.normalColor(dataTypeIn.id);
-        selectedColor = normalColorOut.darker(200);
+            useGradientColor = (dataTypeOut.id != dataTypeIn.id);
+
+            normalColorOut = connectionStyle.normalColor(dataTypeOut.id);
+            normalColorIn = connectionStyle.normalColor(dataTypeIn.id);
+            selectedColor = normalColorOut.darker(200);
+        }
     }
 
     // geometry

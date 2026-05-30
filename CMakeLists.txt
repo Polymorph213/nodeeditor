@@ -150,6 +150,10 @@ target_include_directories(QtNodes
   PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/QtNodes/internal>
+    # CICADA: DefaultConnectionPainter.cpp includes
+    # cicada/ui/WireColors.h to apply the semantic palette. The header
+    # only forward-declares Qt types so this introduces no link cycle.
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
 )
 
 target_link_libraries(QtNodes
