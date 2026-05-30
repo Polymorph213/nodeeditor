@@ -15,6 +15,11 @@
 
 #include <cmath>
 
+// CICADA semantic port-color palette. Replaces QtNodes' hash-seeded
+// dot color with the same palette used for wires, so a port dot and
+// its outgoing wire match in color.
+#include "cicada/ui/WireColors.h"
+
 namespace QtNodes {
 
 void DefaultNodePainter::paint(QPainter *painter, NodeGraphicsObject &ngo) const
@@ -166,7 +171,21 @@ void DefaultNodePainter::drawConnectionPoints(QPainter *painter, NodeGraphicsObj
                 }
             }
 
-            if (connectionStyle.useDataDefinedColors()) {
+            // CICADA: dot color matches wire color via wireColorFor.
+            // For Out ports, fetch the actual outData so TypedListData
+            // homogeneity is reflected; for In ports the declared
+            // type drives the color (so a Number-input dot is red
+            // even when nothing is wired).
+            std::shared_ptr<NodeData> dotData;
+            if (portType == PortType::Out) {
+                dotData = model.portData(nodeId, portType, portIndex,
+                                         PortRole::Data)
+                              .value<std::shared_ptr<NodeData>>();
+            }
+            QColor cicadaColor = cicada::ui::wireColorFor(dataType, dotData);
+            if (cicadaColor.isValid()) {
+                painter->setBrush(cicadaColor);
+            } else if (connectionStyle.useDataDefinedColors()) {
                 painter->setBrush(connectionStyle.normalColor(dataType.id));
             } else {
                 painter->setBrush(nodeStyle.ConnectionPointColor);
@@ -210,7 +229,21 @@ void DefaultNodePainter::drawFilledConnectionPoints(QPainter *painter, NodeGraph
                                            .value<NodeDataType>();
 
                 auto const &connectionStyle = StyleCollection::connectionStyle();
-                if (connectionStyle.useDataDefinedColors()) {
+                // CICADA palette first; falls back to hash color or
+                // hard-coded brush. Out ports fetch outData for
+                // TypedListData homogeneity classification.
+                std::shared_ptr<NodeData> dotData;
+                if (portType == PortType::Out) {
+                    dotData = model.portData(nodeId, portType, portIndex,
+                                             PortRole::Data)
+                                  .value<std::shared_ptr<NodeData>>();
+                }
+                QColor const cicadaColor =
+                    cicada::ui::wireColorFor(dataType, dotData);
+                if (cicadaColor.isValid()) {
+                    painter->setPen(cicadaColor);
+                    painter->setBrush(cicadaColor);
+                } else if (connectionStyle.useDataDefinedColors()) {
                     QColor const c = connectionStyle.normalColor(dataType.id);
                     painter->setPen(c);
                     painter->setBrush(c);

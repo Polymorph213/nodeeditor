@@ -40,9 +40,55 @@ void DefaultConnectionPainter::drawSketchLine(QPainter *painter,
     if (state.requiresPort() || state.frozen()) {
         auto const &connectionStyle = QtNodes::StyleCollection::connectionStyle();
 
+        // CICADA: color the draft wire to match the type of the
+        // attached source. The "required port" is the end NOT attached;
+        // the opposite end is the source we color against.
+        QColor sketchColor = connectionStyle.constructionColor();
+        {
+            using QtNodes::PortType;
+            AbstractGraphModel const &graphModel = cgo.graphModel();
+            PortType requiredPort = state.requiredPort();
+            auto const cId = cgo.connectionId();
+            NodeId attachedNodeId = NodeId{};
+            PortIndex attachedPortIdx = 0;
+            PortType attachedPortType = PortType::Out;
+            if (requiredPort == PortType::In) {
+                // Dragging FROM an out port toward an in port.
+                attachedNodeId = cId.outNodeId;
+                attachedPortIdx = cId.outPortIndex;
+                attachedPortType = PortType::Out;
+            } else if (requiredPort == PortType::Out) {
+                // Dragging FROM an in port toward an out port (rare).
+                attachedNodeId = cId.inNodeId;
+                attachedPortIdx = cId.inPortIndex;
+                attachedPortType = PortType::In;
+            }
+            if (attachedNodeId != InvalidNodeId) {
+                auto dataType = graphModel
+                                    .portData(attachedNodeId, attachedPortType,
+                                              attachedPortIdx,
+                                              PortRole::DataType)
+                                    .value<NodeDataType>();
+                std::shared_ptr<NodeData> attachedData;
+                if (attachedPortType == PortType::Out) {
+                    attachedData = graphModel
+                                       .portData(attachedNodeId,
+                                                 attachedPortType,
+                                                 attachedPortIdx,
+                                                 PortRole::Data)
+                                       .value<std::shared_ptr<NodeData>>();
+                }
+                QColor cicadaColor =
+                    cicada::ui::wireColorFor(dataType, attachedData);
+                if (cicadaColor.isValid()) {
+                    sketchColor = cicadaColor;
+                }
+            }
+        }
+
         QPen pen;
         pen.setWidth(static_cast<int>(connectionStyle.constructionLineWidth()));
-        pen.setColor(connectionStyle.constructionColor());
+        pen.setColor(sketchColor);
         pen.setStyle(Qt::DashLine);
 
         painter->setPen(pen);
