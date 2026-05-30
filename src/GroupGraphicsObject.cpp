@@ -203,6 +203,31 @@ void GroupGraphicsObject::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
     setHovered(false);
 }
 
+void GroupGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
+{
+    // CICADA: forward the press to a node if one sits at higher Z
+    // under the cursor. The Z-order assignment (group at -10, nodes
+    // at 0) should already make Qt's hit-test pick the node first,
+    // but stale BSP caches + the node's embedded QGraphicsProxyWidget
+    // sub-items occasionally let the GROUP rectangle win the press.
+    // Result: clicking on a node inside a group selected the group
+    // and dragged everything. Explicitly checking items(scenePos)
+    // and ignoring the event when a NodeGraphicsObject is present
+    // forces the click to propagate to that node.
+    if (scene()) {
+        for (QGraphicsItem *item : scene()->items(event->scenePos())) {
+            if (item == this) {
+                continue;
+            }
+            if (qgraphicsitem_cast<NodeGraphicsObject *>(item)) {
+                event->ignore();
+                return;
+            }
+        }
+    }
+    QGraphicsItem::mousePressEvent(event);
+}
+
 void GroupGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
     QGraphicsItem::mouseMoveEvent(event);

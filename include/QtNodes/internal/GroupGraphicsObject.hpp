@@ -200,6 +200,12 @@ protected:
     /** @copydoc QGraphicsItem::hoverLeaveEvent() */
     void hoverLeaveEvent(QGraphicsSceneHoverEvent *event) override;
 
+    /// CICADA: if a node is under the cursor at higher Z, propagate
+    /// the press to it instead of starting a group drag. Without this
+    /// override Qt's BSP hit-test occasionally returned the group
+    /// rectangle for clicks meant for an enclosed node.
+    void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
+
     /** @copydoc QGraphicsItem::mouseMoveEvent() */
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
 
