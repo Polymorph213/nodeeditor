@@ -293,11 +293,12 @@ void GraphicsView::scaleUp()
     }
 
     scale(factor, factor);
-    // CICADA perf: above 1.0× the antialiased grid + connection splines
-    // dominate frame time without giving any visible benefit (lines are
-    // already multi-pixel wide). Toggle AA off when zoomed in, on when
-    // zoomed out. Safe: doesn't touch optimisation flags or scene index.
-    setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    // CICADA perf: AA stays on at every zoom level — the drop-shadow
+    // toggle in applyZoomCostMitigations() already covers the bulk of
+    // the zoom-in frame cost, so we don't need to sacrifice line
+    // quality. Keep antialiasing on for crisp connection splines and
+    // node borders.
+    setRenderHint(QPainter::Antialiasing, true);
     applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
 }
@@ -338,7 +339,7 @@ void GraphicsView::scaleDown()
     }
 
     scale(factor, factor);
-    setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    setRenderHint(QPainter::Antialiasing, true);
     applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
 }
