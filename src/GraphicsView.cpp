@@ -521,20 +521,32 @@ void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
         _rightDragged = false;
         event->accept();
         if (!wasDrag) {
-            // CICADA mouse model: right-click without drag opens the
-            // grouping menu (Add to group / Create group from
+            // CICADA mouse model: right-click without drag opens a
+            // context menu. If the click landed on a group's frame,
+            // open the group menu (Delete group / Remove selected from
+            // group / Color / Save / Copy / Cut). Otherwise open the
+            // generic group menu (Add to group / Create group from
             // selection / Copy / Cut). The full "all node types"
-            // QtNodes scene menu is intentionally NOT used — node
-            // search lives on double-click and Space.
+            // QtNodes scene menu is NOT used — node search is on
+            // double-click and Space.
             //
             // exec() is a direct call that bypasses NodeEditor's
             // eventFilter (which still swallows every QEvent::
-            // ContextMenu to stop the QtNodes scene menu from
-            // sneaking back in).
+            // ContextMenu to keep the QtNodes all-nodes menu out).
             BasicGraphicsScene *scene = nodeScene();
             if (scene) {
                 const QPointF scenePos = mapToScene(event->pos());
-                QMenu *menu = scene->createStdMenu(scenePos);
+                GroupGraphicsObject *groupGo = nullptr;
+                for (QGraphicsItem *item : items(event->pos())) {
+                    if (auto *g =
+                            qgraphicsitem_cast<GroupGraphicsObject *>(item)) {
+                        groupGo = g;
+                        break;
+                    }
+                }
+                QMenu *menu = groupGo
+                                  ? scene->createGroupMenu(scenePos, groupGo)
+                                  : scene->createStdMenu(scenePos);
                 if (menu) {
                     menu->exec(event->globalPosition().toPoint());
                 }

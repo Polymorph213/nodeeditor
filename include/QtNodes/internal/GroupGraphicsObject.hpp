@@ -250,7 +250,15 @@ private:
     static constexpr double _defaultWidth = 50.0;
     static constexpr double _defaultHeight = 50.0;
 
-    static constexpr double _groupAreaZValue = 2.0;
+    // CICADA: group must sit BENEATH nodes (Z=0) and connections
+    // (Z=-1) so the fill rectangle never visually covers the
+    // contained items. Bumped from 2.0 to 10.0 — node Z briefly hits
+    // +1.0 during drag (NodeGraphicsObject sets it on press), so the
+    // group's -2.0 was actually OK on paper but visually marginal;
+    // -10.0 gives a clear stacking gap and prevents any future
+    // node-Z bump from accidentally putting a node beneath the
+    // group rect.
+    static constexpr double _groupAreaZValue = 10.0;
 };
 
 } // namespace QtNodes

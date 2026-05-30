@@ -754,6 +754,68 @@ QMenu *BasicGraphicsScene::createGroupMenu(QPointF const scenePos, GroupGraphics
         }
     });
 
+    menu->addSeparator();
+
+    // CICADA: count selected nodes that belong to THIS group. If any
+    // are selected, expose "Remove selected from group" so the user
+    // can pop nodes out without nuking the whole group. Always expose
+    // "Delete group" so the user can dissolve the group entirely (the
+    // contained nodes survive — see undoStack DeleteCommand path).
+    int selectedMembersCount = 0;
+    {
+        auto const &members = groupGo->group().childNodes();
+        for (NodeGraphicsObject *child : members) {
+            if (child && child->isSelected()) {
+                ++selectedMembersCount;
+            }
+        }
+    }
+
+    QAction *removeSelectedAction = nullptr;
+    if (selectedMembersCount > 0) {
+        removeSelectedAction = menu->addAction(
+            QStringLiteral("Remove %1 selected node%2 from group")
+                .arg(selectedMembersCount)
+                .arg(selectedMembersCount == 1 ? QString()
+                                               : QStringLiteral("s")));
+        connect(removeSelectedAction, &QAction::triggered, [this, groupGo] {
+            // Snapshot the IDs first because removeNodeFromGroup may
+            // erase the group entirely (last node out) and invalidate
+            // groupGo. Iterate via stored IDs, not live members.
+            std::vector<NodeId> toRemove;
+            for (NodeGraphicsObject *child : groupGo->group().childNodes()) {
+                if (child && child->isSelected()) {
+                    toRemove.push_back(child->nodeId());
+                }
+            }
+            for (NodeId id : toRemove) {
+                removeNodeFromGroup(id);
+            }
+        });
+    }
+
+    QAction *deleteGroupAction =
+        menu->addAction(QStringLiteral("Delete group"));
+    connect(deleteGroupAction, &QAction::triggered, [this, groupGo] {
+        // Dissolve the group while leaving every contained node alive.
+        // removeNodeFromGroup auto-erases the group from the scene's
+        // _groups map once the last child is removed (see
+        // BasicGraphicsScene::removeNodeFromGroup lines 574-576), so
+        // looping the full membership cleans up the group itself
+        // without needing a separate "delete the group object" call.
+        std::vector<NodeId> allMembers;
+        for (NodeGraphicsObject *child : groupGo->group().childNodes()) {
+            if (child) {
+                allMembers.push_back(child->nodeId());
+            }
+        }
+        for (NodeId id : allMembers) {
+            removeNodeFromGroup(id);
+        }
+    });
+
+    menu->addSeparator();
+
     QAction *copyAction = menu->addAction("Copy");
     copyAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_C));
 
