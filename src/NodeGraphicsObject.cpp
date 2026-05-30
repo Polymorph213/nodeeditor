@@ -86,7 +86,16 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
 
     setLockedState();
 
-    setCacheMode(QGraphicsItem::DeviceCoordinateCache);
+    // CICADA fix: previously this was DeviceCoordinateCache. That caches
+    // the node's painted pixmap at the CURRENT view scale; when the user
+    // zooms in, Qt re-rasterises the cache at the new (magnified) scale
+    // — expensive (pixmap alloc + blit) AND the cached image is the
+    // OLD painted content. Result: at high zoom many nodes ghost or
+    // render incompletely AND scrolling/zooming becomes laggy. NoCache
+    // makes Qt re-paint the item directly each frame; with our R2
+    // bounding-rect fix + the P2 bezier cache that's plenty fast and
+    // the rendering is always correct.
+    setCacheMode(QGraphicsItem::NoCache);
 
     QJsonObject nodeStyleJson = _graphModel.nodeData(_nodeId, NodeRole::Style).toJsonObject();
 
