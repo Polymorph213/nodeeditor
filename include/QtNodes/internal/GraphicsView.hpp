@@ -91,12 +91,6 @@ protected:
     /// Computes scene position for pasting the copied/duplicated node groups.
     QPointF scenePastePosition();
 
-    /// CICADA perf: at zoom >= 1.0 we disable per-item graphics effects
-    /// (QGraphicsDropShadowEffect dominates frame time on dense graphs
-    /// because Qt rasterises each item to an offscreen buffer then runs
-    /// a Gaussian blur per frame). Called from scaleUp / scaleDown.
-    void applyZoomCostMitigations();
-
 private:
     QAction *_clearSelectionAction = nullptr;
     QAction *_deleteSelectionAction = nullptr;

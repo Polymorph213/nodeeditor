@@ -101,14 +101,12 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
 
     NodeStyle nodeStyle(nodeStyleJson);
 
-    if (nodeStyle.ShadowEnabled) {
-        auto effect = new QGraphicsDropShadowEffect;
-        effect->setOffset(4, 4);
-        effect->setBlurRadius(20);
-        effect->setColor(nodeStyle.ShadowColor);
-
-        setGraphicsEffect(effect);
-    }
+    // CICADA perf: the per-node QGraphicsDropShadowEffect was the
+    // dominant frame-time cost at high zoom (Qt rasterises each item
+    // through an offscreen Gaussian blur sized in screen pixels). The
+    // shadow is decorative — turning it off entirely is a hard win on
+    // every dense graph at every zoom level. Style file ShadowEnabled
+    // flag is ignored on purpose.
 
     setOpacity(nodeStyle.Opacity);
 

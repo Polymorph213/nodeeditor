@@ -293,35 +293,12 @@ void GraphicsView::scaleUp()
     }
 
     scale(factor, factor);
-    // CICADA perf: AA stays on at every zoom level — the drop-shadow
-    // toggle in applyZoomCostMitigations() already covers the bulk of
-    // the zoom-in frame cost, so we don't need to sacrifice line
-    // quality. Keep antialiasing on for crisp connection splines and
-    // node borders.
+    // CICADA perf: AA stays on at every zoom level. The per-node drop
+    // shadow that used to dominate zoom-in frame time has been removed
+    // from NodeGraphicsObject entirely (see commit), so there's nothing
+    // left to mitigate beyond keeping connection splines crisp.
     setRenderHint(QPainter::Antialiasing, true);
-    applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
-}
-
-void GraphicsView::applyZoomCostMitigations()
-{
-    // CICADA perf: at high zoom, every NodeGraphicsObject's
-    // QGraphicsDropShadowEffect is the dominant frame cost. Qt renders
-    // the node to an offscreen buffer, runs a 20-px Gaussian blur, then
-    // blits. The cost is quadratic in screen-pixel area, so a 2× zoom
-    // makes the shadow ~4× more expensive per frame per visible node.
-    // Disable the effect when zoom >= 1.0 (the shadow is barely visible
-    // anyway at high zoom because the offset is fixed in scene units);
-    // re-enable when zoomed out. Same idea for AA above.
-    if (!scene())
-        return;
-    const bool effectsOn = transform().m11() < 1.0;
-    for (QGraphicsItem *it : scene()->items()) {
-        if (QGraphicsObject *obj = it->toGraphicsObject()) {
-            if (QGraphicsEffect *fx = obj->graphicsEffect())
-                fx->setEnabled(effectsOn);
-        }
-    }
 }
 
 void GraphicsView::scaleDown()
@@ -340,7 +317,6 @@ void GraphicsView::scaleDown()
 
     scale(factor, factor);
     setRenderHint(QPainter::Antialiasing, true);
-    applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
 }
 
