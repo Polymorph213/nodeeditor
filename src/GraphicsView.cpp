@@ -11,6 +11,7 @@
 #include "UndoCommands.hpp"
 
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QScrollBar> // for horizontalScrollBar() / verticalScrollBar() return-type calls
 
 #include <QtWidgets/QGraphicsScene>
 
@@ -470,16 +471,14 @@ void GraphicsView::keyReleaseEvent(QKeyEvent *event)
 void GraphicsView::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::RightButton) {
-        // CICADA mouse model: right-button starts a pan. Capture both
-        // the scene-space click position (for the pan delta math) and
-        // the screen-space position (for the pan-vs-menu threshold in
-        // mouseReleaseEvent). Do NOT forward to QGraphicsView — the
-        // base class would interpret right-click as deselection.
-        _clickPos = mapToScene(event->pos());
+        // CICADA mouse model: right-button starts a pan. Capture the
+        // screen-space click position (for the pan delta math AND the
+        // pan-vs-menu threshold in mouseReleaseEvent). Do NOT forward
+        // to QGraphicsView — the base class would treat right-press
+        // as deselection.
         _rightPressScreenPos = event->pos();
+        _rightLastScreenPos = event->pos();
         _rightDragged = false;
-        qDebug() << "GraphicsView: RIGHT-PRESS at" << event->pos()
-                 << "-> pan armed";
         event->accept();
         return;
     }
@@ -492,23 +491,23 @@ void GraphicsView::mousePressEvent(QMouseEvent *event)
 void GraphicsView::mouseMoveEvent(QMouseEvent *event)
 {
     if (event->buttons() & Qt::RightButton) {
-        // Right-drag pans the canvas. Mark the drag once movement
-        // exceeds the threshold so mouseReleaseEvent knows it was a
-        // real pan and not a quick click.
+        // Right-drag pans the canvas via scrollbar values — the
+        // standard QGraphicsView pan technique. The legacy
+        // `setSceneRect(... translated ...)` only changes the scene
+        // BOUNDS; it does not move the visible area, so panning
+        // appeared dead.
         if (!_rightDragged) {
-            int dx = event->pos().x() - _rightPressScreenPos.x();
-            int dy = event->pos().y() - _rightPressScreenPos.y();
-            if (dx * dx + dy * dy > 25) { // 5px threshold
+            int dx0 = event->pos().x() - _rightPressScreenPos.x();
+            int dy0 = event->pos().y() - _rightPressScreenPos.y();
+            if (dx0 * dx0 + dy0 * dy0 > 25) { // 5px threshold
                 _rightDragged = true;
-                qDebug() << "GraphicsView: RIGHT-DRAG started, panning";
             }
         }
-        // Pan unconditionally — there's no item to grab during a
-        // right-drag because right-press doesn't grab items. The
-        // mouseGrabberItem() == nullptr guard was leftover from the
-        // left-button pan path and could prevent panning over nodes.
-        QPointF difference = _clickPos - mapToScene(event->pos());
-        setSceneRect(sceneRect().translated(difference.x(), difference.y()));
+        int dx = event->pos().x() - _rightLastScreenPos.x();
+        int dy = event->pos().y() - _rightLastScreenPos.y();
+        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - dx);
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - dy);
+        _rightLastScreenPos = event->pos();
         event->accept();
         return;
     }

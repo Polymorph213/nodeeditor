@@ -102,11 +102,12 @@ private:
     QAction *_pasteAction = nullptr;
 
     QPointF _clickPos;
-    // CICADA mouse model: right-button pans. Track press position
-    // (screen-space) and whether the press has crossed the pan
-    // threshold so mouseReleaseEvent can distinguish a quick click
-    // (open context menu) from a drag (suppress menu).
+    // CICADA mouse model: right-button pans. Tracks press position
+    // (screen-space) for the pan-vs-click threshold, last move
+    // position for incremental scrollbar deltas, and the drag flag
+    // so mouseReleaseEvent could differentiate a click from a drag.
     QPoint _rightPressScreenPos;
+    QPoint _rightLastScreenPos;
     bool _rightDragged = false;
     ScaleRange _scaleRange;
 
