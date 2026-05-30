@@ -516,9 +516,19 @@ void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
             auto diff = event->pos() - event->lastPos();
             if (nodeScene()->groupingEnabled()) {
                 if (auto nodeGroup = _nodeGroup.lock(); nodeGroup) {
-                    nodeGroup->groupGraphicsObject().moveConnections();
-                    if (nodeGroup->groupGraphicsObject().locked()) {
-                        nodeGroup->groupGraphicsObject().moveNodes(diff);
+                    auto &ggo = nodeGroup->groupGraphicsObject();
+                    ggo.moveConnections();
+                    if (ggo.locked()) {
+                        ggo.moveNodes(diff);
+                    } else {
+                        // CICADA: when an unlocked-group child node
+                        // moves, tell the group its cached bounding
+                        // rect is stale and force a repaint. Without
+                        // these calls the group rectangle stays at
+                        // the OLD size and visually does not expand /
+                        // retract to follow the node.
+                        ggo.invalidateGeometry();
+                        ggo.update();
                     }
                 } else {
                     moveConnections();

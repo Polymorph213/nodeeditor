@@ -103,6 +103,19 @@ public:
     /// default (black/transparent) brush.
     QColor fillColor() const { return _currentFillColor; }
 
+    /// Records that the user has chosen a custom fill color via the
+    /// "Change color..." menu. When true, setHovered / lock() must NOT
+    /// overwrite _currentFillColor with their hardcoded hover /
+    /// locked / unlocked constants — otherwise the user's color
+    /// vanishes the moment the cursor enters the group.
+    bool _userFillColorOverridden = false;
+
+    /// Public wrapper around the protected QGraphicsItem
+    /// prepareGeometryChange(). Called by NodeGraphicsObject when a
+    /// child node moves so the group invalidates its cached bounding
+    /// rect and the rectangle visually expands / retracts to follow.
+    void invalidateGeometry() { prepareGeometryChange(); }
+
     /**
    * @brief Sets the group's border color.
    * @param color Color to paint the group's border.

@@ -149,8 +149,17 @@ void GroupGraphicsObject::positionLockedIcon()
 
 void GroupGraphicsObject::setHovered(bool hovered)
 {
-    hovered ? setFillColor(locked() ? kLockedHoverColor : kUnlockedHoverColor)
-            : setFillColor(locked() ? kLockedFillColor : kUnlockedFillColor);
+    // CICADA: only override the fill color on hover when the user
+    // has NOT picked a custom color via "Change color...". Otherwise
+    // every mouse-enter / mouse-leave would clobber the user's choice
+    // with the hardcoded kUnlocked*/kLocked* constants.
+    if (!_userFillColorOverridden) {
+        hovered
+            ? _currentFillColor =
+                  (locked() ? kLockedHoverColor : kUnlockedHoverColor)
+            : _currentFillColor =
+                  (locked() ? kLockedFillColor : kUnlockedFillColor);
+    }
 
     for (auto &node : _group.childNodes()) {
         auto ngo = node->nodeScene()->nodeGraphicsObject(node->nodeId());

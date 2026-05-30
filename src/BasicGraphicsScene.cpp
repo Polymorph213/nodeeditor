@@ -754,6 +754,10 @@ QMenu *BasicGraphicsScene::createGroupMenu(QPointF const scenePos, GroupGraphics
             QColorDialog::ShowAlphaChannel);
         if (picked.isValid()) {
             groupGo->setFillColor(picked);
+            // Mark the color as user-chosen so setHovered() does NOT
+            // overwrite it the next time the cursor enters / leaves
+            // the group rect.
+            groupGo->_userFillColorOverridden = true;
             groupGo->update();
         }
     });
