@@ -81,6 +81,8 @@ protected:
 
     void mouseMoveEvent(QMouseEvent *event) override;
 
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
     void drawBackground(QPainter *painter, const QRectF &r) override;
 
     void showEvent(QShowEvent *event) override;
@@ -100,6 +102,12 @@ private:
     QAction *_pasteAction = nullptr;
 
     QPointF _clickPos;
+    // CICADA mouse model: right-button pans. Track press position
+    // (screen-space) and whether the press has crossed the pan
+    // threshold so mouseReleaseEvent can distinguish a quick click
+    // (open context menu) from a drag (suppress menu).
+    QPoint _rightPressScreenPos;
+    bool _rightDragged = false;
     ScaleRange _scaleRange;
 
     QLineEdit *_labelEdit = nullptr;

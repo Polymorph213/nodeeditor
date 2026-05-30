@@ -12,6 +12,7 @@
 #include "NodeDelegateModel.hpp"
 #include "NodeGraphicsObject.hpp"
 
+#include <QColorDialog> // CICADA group polish: pick group fill color
 #include <QUndoStack>
 
 #include <QHeaderView>
@@ -734,6 +735,24 @@ QMenu *BasicGraphicsScene::createGroupMenu(QPointF const scenePos, GroupGraphics
     if (_groupingEnabled) {
         saveGroup = menu->addAction("Save group...");
     }
+
+    // CICADA group polish: let the user pick a custom fill color via
+    // QColorDialog. The chosen color persists in the group's save/load
+    // JSON via NodeGroup serialization.
+    QAction *colorAction = menu->addAction("Change color...");
+    connect(colorAction, &QAction::triggered, [groupGo] {
+        // QGraphicsRectItem stores the brush color directly; reuse
+        // it as the dialog's initial value so the user sees the
+        // current fill rather than a default white.
+        QColor const initial = groupGo->brush().color();
+        QColor const picked = QColorDialog::getColor(
+            initial, nullptr, QStringLiteral("Group fill color"),
+            QColorDialog::ShowAlphaChannel);
+        if (picked.isValid()) {
+            groupGo->setFillColor(picked);
+            groupGo->update();
+        }
+    });
 
     QAction *copyAction = menu->addAction("Copy");
     copyAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_C));

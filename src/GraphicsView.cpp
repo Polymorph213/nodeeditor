@@ -43,7 +43,11 @@ GraphicsView::GraphicsView(QWidget *parent)
     , _copySelectionAction(Q_NULLPTR)
     , _pasteAction(Q_NULLPTR)
 {
-    setDragMode(QGraphicsView::ScrollHandDrag);
+    // CICADA mouse model: left-button does rubber-band selection (the
+    // typical CAD pattern), right-button does panning (see
+    // mousePressEvent / mouseMoveEvent below). Default-disable the
+    // hand-cursor because RubberBandDrag draws the selection rect.
+    setDragMode(QGraphicsView::RubberBandDrag);
     setRenderHint(QPainter::Antialiasing);
 
     auto const &flowViewStyle = StyleCollection::flowViewStyle();
@@ -443,10 +447,9 @@ void GraphicsView::keyPressEvent(QKeyEvent *event)
     }
 
     break;
-    case Qt::Key_Shift:
-        setDragMode(QGraphicsView::RubberBandDrag);
-        break;
-
+    // CICADA mouse model: left = rubber-band (always), right = pan.
+    // The legacy Shift-to-RubberBandDrag toggle is removed — the
+    // default IS rubber-band now.
     default:
         break;
     }
@@ -456,19 +459,23 @@ void GraphicsView::keyPressEvent(QKeyEvent *event)
 
 void GraphicsView::keyReleaseEvent(QKeyEvent *event)
 {
-    switch (event->key()) {
-    case Qt::Key_Shift:
-        setDragMode(QGraphicsView::ScrollHandDrag);
-        break;
-
-    default:
-        break;
-    }
     QGraphicsView::keyReleaseEvent(event);
 }
 
 void GraphicsView::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::RightButton) {
+        // CICADA mouse model: right-button starts a pan. Capture both
+        // the scene-space click position (for the pan delta math) and
+        // the screen-space position (for the pan-vs-menu threshold in
+        // mouseReleaseEvent). Do NOT forward to QGraphicsView — the
+        // base class would interpret right-click as deselection.
+        _clickPos = mapToScene(event->pos());
+        _rightPressScreenPos = event->pos();
+        _rightDragged = false;
+        event->accept();
+        return;
+    }
     QGraphicsView::mousePressEvent(event);
     if (event->button() == Qt::LeftButton) {
         _clickPos = mapToScene(event->pos());
@@ -477,18 +484,44 @@ void GraphicsView::mousePressEvent(QMouseEvent *event)
 
 void GraphicsView::mouseMoveEvent(QMouseEvent *event)
 {
-    QGraphicsView::mouseMoveEvent(event);
-
-    if (!scene())
-        return;
-
-    if (scene()->mouseGrabberItem() == nullptr && event->buttons() == Qt::LeftButton) {
-        // Make sure shift is not being pressed
-        if ((event->modifiers() & Qt::ShiftModifier) == 0) {
+    if (event->buttons() & Qt::RightButton) {
+        // Right-drag pans the canvas. Mark the drag once movement
+        // exceeds the threshold so mouseReleaseEvent knows to suppress
+        // the context menu.
+        if (!_rightDragged) {
+            int dx = event->pos().x() - _rightPressScreenPos.x();
+            int dy = event->pos().y() - _rightPressScreenPos.y();
+            if (dx * dx + dy * dy > 25) { // 5px threshold
+                _rightDragged = true;
+            }
+        }
+        if (scene() && scene()->mouseGrabberItem() == nullptr) {
             QPointF difference = _clickPos - mapToScene(event->pos());
             setSceneRect(sceneRect().translated(difference.x(), difference.y()));
         }
+        event->accept();
+        return;
     }
+    QGraphicsView::mouseMoveEvent(event);
+}
+
+void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::RightButton) {
+        bool wasDrag = _rightDragged;
+        _rightDragged = false;
+        event->accept();
+        if (!wasDrag) {
+            // No drag → treat as a normal right-click and let the
+            // canvas context menu fire via contextMenuEvent.
+            QContextMenuEvent cme(QContextMenuEvent::Mouse,
+                                  event->pos(),
+                                  event->globalPosition().toPoint());
+            QGraphicsView::contextMenuEvent(&cme);
+        }
+        return;
+    }
+    QGraphicsView::mouseReleaseEvent(event);
 }
 
 void GraphicsView::drawBackground(QPainter *painter, const QRectF &r)
