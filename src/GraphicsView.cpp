@@ -517,11 +517,29 @@ void GraphicsView::mouseMoveEvent(QMouseEvent *event)
 void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::RightButton) {
-        // CICADA mouse model: right-button is reserved for panning.
-        // A quick right-click (no drag) does NOT pop a context menu —
-        // the user accesses node-search via double-click instead.
+        bool wasDrag = _rightDragged;
         _rightDragged = false;
         event->accept();
+        if (!wasDrag) {
+            // CICADA mouse model: right-click without drag opens the
+            // grouping menu (Add to group / Create group from
+            // selection / Copy / Cut). The full "all node types"
+            // QtNodes scene menu is intentionally NOT used — node
+            // search lives on double-click and Space.
+            //
+            // exec() is a direct call that bypasses NodeEditor's
+            // eventFilter (which still swallows every QEvent::
+            // ContextMenu to stop the QtNodes scene menu from
+            // sneaking back in).
+            BasicGraphicsScene *scene = nodeScene();
+            if (scene) {
+                const QPointF scenePos = mapToScene(event->pos());
+                QMenu *menu = scene->createStdMenu(scenePos);
+                if (menu) {
+                    menu->exec(event->globalPosition().toPoint());
+                }
+            }
+        }
         return;
     }
     QGraphicsView::mouseReleaseEvent(event);
