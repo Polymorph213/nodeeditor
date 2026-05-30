@@ -123,7 +123,13 @@ void GroupGraphicsObject::lock(bool locked)
     _unlockedGraphicsItem->setVisible(!locked);
     setFillColor(locked ? kLockedFillColor : kUnlockedFillColor);
     _locked = locked;
-    setZValue(locked ? _groupAreaZValue : -_groupAreaZValue);
+    // CICADA: the rectangle must STAY beneath nodes regardless of the
+    // lock state. The legacy code flipped Z to +_groupAreaZValue on
+    // lock, putting the group ABOVE the nodes and blocking all clicks
+    // on the contained items. Use the same negative Z either way so
+    // clicks always reach nodes; the visual lock indicator is the
+    // padlock icon (made visible above), not a stacking change.
+    setZValue(-_groupAreaZValue);
 }
 
 bool GroupGraphicsObject::locked() const

@@ -741,10 +741,14 @@ QMenu *BasicGraphicsScene::createGroupMenu(QPointF const scenePos, GroupGraphics
     // JSON via NodeGroup serialization.
     QAction *colorAction = menu->addAction("Change color...");
     connect(colorAction, &QAction::triggered, [groupGo] {
-        // QGraphicsRectItem stores the brush color directly; reuse
-        // it as the dialog's initial value so the user sees the
-        // current fill rather than a default white.
-        QColor const initial = groupGo->brush().color();
+        // CICADA: seed the dialog with the GROUP's actual fill color
+        // via fillColor() (the same color paint() reads). The legacy
+        // brush().color() returned the QGraphicsRectItem default
+        // brush — which is Qt::NoBrush/black, since GroupGraphicsObject
+        // never calls setBrush. Using that as the initial value made
+        // the dialog open showing BLACK; if the user clicked OK
+        // without moving the wheel, the group became black.
+        QColor const initial = groupGo->fillColor();
         QColor const picked = QColorDialog::getColor(
             initial, nullptr, QStringLiteral("Group fill color"),
             QColorDialog::ShowAlphaChannel);

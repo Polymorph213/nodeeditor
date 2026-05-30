@@ -95,6 +95,14 @@ public:
    */
     void setFillColor(const QColor &color);
 
+    /// Returns the current fill color (the one paint() uses). Distinct
+    /// from QGraphicsRectItem::brush().color() because this class
+    /// never calls setBrush — it paints with _currentFillColor
+    /// directly. Used by the "Change color..." menu so the picker
+    /// opens seeded with the actual current color rather than the
+    /// default (black/transparent) brush.
+    QColor fillColor() const { return _currentFillColor; }
+
     /**
    * @brief Sets the group's border color.
    * @param color Color to paint the group's border.
