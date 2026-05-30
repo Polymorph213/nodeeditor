@@ -145,6 +145,8 @@ void ConnectionGraphicsObject::setEndPoint(PortType portType, QPointF const &poi
         _in = point;
     else
         _out = point;
+    // CICADA perf (P2): endpoint moved → cached bezier C1/C2 are stale.
+    _c1c2Valid = false;
 }
 
 void ConnectionGraphicsObject::move()
@@ -173,6 +175,9 @@ void ConnectionGraphicsObject::move()
 
     moveEnd(_connectionId, PortType::Out);
     moveEnd(_connectionId, PortType::In);
+
+    // CICADA perf (P2): endpoints just refreshed → bezier cache stale.
+    _c1c2Valid = false;
 
     prepareGeometryChange();
 
@@ -289,14 +294,23 @@ void ConnectionGraphicsObject::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 
 std::pair<QPointF, QPointF> ConnectionGraphicsObject::pointsC1C2() const
 {
+    // CICADA perf (P2): cache the bezier control points. paint(), shape()
+    // and boundingRect() all call this; without the cache a 100-connection
+    // scene paid ~300 recomputes per frame on top of Qt's per-frame
+    // redraw. Invalidated in move() and setEndPoint().
+    if (_c1c2Valid)
+        return _cachedC1C2;
+
     switch (nodeScene()->orientation()) {
     case Qt::Horizontal:
-        return pointsC1C2Horizontal();
-        break;
+        _cachedC1C2 = pointsC1C2Horizontal();
+        _c1c2Valid = true;
+        return _cachedC1C2;
 
     case Qt::Vertical:
-        return pointsC1C2Vertical();
-        break;
+        _cachedC1C2 = pointsC1C2Vertical();
+        _c1c2Valid = true;
+        return _cachedC1C2;
     }
 
     throw std::logic_error("Unreachable code after switch statement");

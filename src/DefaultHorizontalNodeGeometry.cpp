@@ -27,8 +27,20 @@ QRectF DefaultHorizontalNodeGeometry::boundingRect(NodeId const nodeId) const
 {
     QSize s = size(nodeId);
 
-    qreal marginSize = 2.0 * _portSpacing;
-    QMargins margins(marginSize, marginSize, marginSize, marginSize);
+    // CICADA fix (R2): DefaultNodePainter draws the validation icon at
+    // (size.width(), 0) extending to (size.width()+16, -16), and the
+    // processing icon inside the body footer. The old margin of
+    // 2 * _portSpacing (20px) was a hair under the validation-icon
+    // overhang in the corner — anything that nudged the icon (zoom
+    // recomputed font, slightly larger icon image) clipped it. Give
+    // explicit overhang headroom on top + right; default 10px on the
+    // other two sides where nothing paints outside the node body.
+    constexpr int kIconOverhang = 20;
+    const int side = static_cast<int>(_portSpacing);
+    QMargins margins(side,                 // left
+                     side + kIconOverhang, // top (validation icon)
+                     side + kIconOverhang, // right (validation icon)
+                     side);                // bottom
 
     QRectF r(QPointF(0, 0), s);
 

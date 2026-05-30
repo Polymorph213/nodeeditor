@@ -91,6 +91,14 @@ private:
 
     mutable QPointF _out;
     mutable QPointF _in;
+
+    // CICADA perf (P2): per-paint, pointsC1C2() used to recompute the
+    // bezier control points from scratch — and it's called from paint(),
+    // shape(), AND boundingRect(), so a single redraw of a 100-connection
+    // scene was ~300 recomputes. Cache here, invalidate on move() and
+    // setEndPoint() (the only inputs to the calculation).
+    mutable std::pair<QPointF, QPointF> _cachedC1C2{};
+    mutable bool _c1c2Valid{false};
 };
 
 } // namespace QtNodes

@@ -2,7 +2,6 @@
 
 #include "BasicGraphicsScene.hpp"
 #include "ConnectionGraphicsObject.hpp"
-#include "Definitions.hpp"
 #include "DataFlowGraphModel.hpp"
 #include "Definitions.hpp"
 #include "GroupGraphicsObject.hpp"
@@ -299,6 +298,12 @@ void GraphicsView::scaleUp()
     // already multi-pixel wide). Toggle AA off when zoomed in, on when
     // zoomed out. Safe: doesn't touch optimisation flags or scene index.
     setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    // CICADA fix (R3): force a paint pass so item-level
+    // DeviceCoordinateCache pixmaps regenerate at the new zoom; without
+    // this we sometimes see crisp geometry but stale rasterised text on
+    // the next paint cycle.
+    if (scene())
+        scene()->update();
     Q_EMIT scaleChanged(transform().m11());
 }
 
@@ -318,6 +323,8 @@ void GraphicsView::scaleDown()
 
     scale(factor, factor);
     setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    if (scene())
+        scene()->update();
     Q_EMIT scaleChanged(transform().m11());
 }
 

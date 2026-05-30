@@ -101,6 +101,11 @@ protected:
     void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override;
     void contextMenuEvent(QGraphicsSceneContextMenuEvent *event) override;
 
+    // CICADA fix (R1): catch QEvent::Resize on the embedded widget so
+    // we re-run recomputeSize + prepareGeometryChange when the widget
+    // grows / shrinks (combo expansion, error label appear, etc.).
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void embedQWidget();
     void setLockedState();

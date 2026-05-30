@@ -27,8 +27,12 @@ QRectF DefaultVerticalNodeGeometry::boundingRect(NodeId const nodeId) const
 {
     QSize s = size(nodeId);
 
-    qreal marginSize = 2.0 * _portSpacing;
-    QMargins margins(marginSize, marginSize, marginSize, marginSize);
+    // CICADA fix (R2): mirror DefaultHorizontalNodeGeometry — the
+    // validation + processing icons paint outside the strict node body
+    // and the previous 20px-all-sides margin was a hair too tight.
+    constexpr int kIconOverhang = 20;
+    const int side = static_cast<int>(_portSpacing);
+    QMargins margins(side, side + kIconOverhang, side + kIconOverhang, side);
 
     QRectF r(QPointF(0, 0), s);
 

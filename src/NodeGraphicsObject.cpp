@@ -28,13 +28,16 @@ namespace {
 class ValidationPopupLabel : public QLabel
 {
 public:
-    ValidationPopupLabel() : QLabel(nullptr)
+    ValidationPopupLabel()
+        : QLabel(nullptr)
     {
-        if (qApp) qApp->installEventFilter(this);
+        if (qApp)
+            qApp->installEventFilter(this);
     }
     ~ValidationPopupLabel() override
     {
-        if (qApp) qApp->removeEventFilter(this);
+        if (qApp)
+            qApp->removeEventFilter(this);
     }
 
 protected:
@@ -148,6 +151,16 @@ void NodeGraphicsObject::embedQWidget()
 
         _proxyWidget->setPreferredWidth(5);
 
+        // CICADA fix (R1): force the embedded widget through one full
+        // layout pass BEFORE recomputeSize() queries its dimensions.
+        // Without adjustSize() the widget reports its size hint (often
+        // smaller than the actual laid-out size) and the node's stored
+        // NodeRole::Size ends up too small for what the widget paints,
+        // so the painted widget gets clipped by boundingRect.
+        w->ensurePolished();
+        w->adjustSize();
+        _proxyWidget->resize(w->size());
+
         geometry.recomputeSize(_nodeId);
 
         if (w->sizePolicy().verticalPolicy() & QSizePolicy::ExpandFlag) {
@@ -165,7 +178,34 @@ void NodeGraphicsObject::embedQWidget()
 
         _proxyWidget->setOpacity(1.0);
         _proxyWidget->setFlag(QGraphicsItem::ItemIgnoresParentOpacity);
+
+        // CICADA fix (R1): if the widget grows or shrinks later (its
+        // combo box expands, an inline error label appears, etc.) we
+        // need to re-run recomputeSize + prepareGeometryChange so the
+        // bounding rect tracks. Install an event filter on the widget
+        // that catches QEvent::Resize.
+        w->installEventFilter(this);
     }
+}
+
+bool NodeGraphicsObject::eventFilter(QObject *watched, QEvent *event)
+{
+    // CICADA fix (R1): when the embedded widget gets resized after
+    // initial layout (combo expansion, error label appear, slider
+    // dynamic content), the node's stored Size becomes stale and
+    // boundingRect clips the widget. Re-run recomputeSize and tell
+    // the scene to re-clip / re-paint.
+    if (event && event->type() == QEvent::Resize && _proxyWidget
+        && watched == _proxyWidget->widget()) {
+        if (auto *sc = nodeScene()) {
+            AbstractNodeGeometry &geom = sc->nodeGeometry();
+            prepareGeometryChange();
+            geom.recomputeSize(_nodeId);
+            updateQWidgetEmbedPos();
+            update();
+        }
+    }
+    return QGraphicsObject::eventFilter(watched, event);
 }
 
 void NodeGraphicsObject::setLockedState()
@@ -291,20 +331,19 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                         toast->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint
                                               | Qt::WindowStaysOnTopHint);
                         toast->setMargin(6);
-                        toast->setStyleSheet(QStringLiteral(
-                            "QLabel {"
-                            "  background: #2b2b2b;"
-                            "  color: #e8e8e8;"
-                            "  border: 1px solid #3498db;"
-                            "  padding: 4px 8px;"
-                            "  font-size: 11px;"
-                            "}"));
+                        toast->setStyleSheet(QStringLiteral("QLabel {"
+                                                            "  background: #2b2b2b;"
+                                                            "  color: #e8e8e8;"
+                                                            "  border: 1px solid #3498db;"
+                                                            "  padding: 4px 8px;"
+                                                            "  font-size: 11px;"
+                                                            "}"));
                         toast->setText(QStringLiteral("Copied to clipboard"));
                         toast->adjustSize();
                         QPoint toastPos;
                         if (auto *view = (scene() && !scene()->views().isEmpty())
-                                              ? scene()->views().first()
-                                              : nullptr) {
+                                             ? scene()->views().first()
+                                             : nullptr) {
                             toastPos = view->viewport()->mapToGlobal(
                                 view->mapFromScene(event->scenePos()));
                         } else {
@@ -335,22 +374,21 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
                     QString const borderCol = (state._state == NodeValidationState::State::Error)
                                                   ? QStringLiteral("#c0392b")
                                                   : QStringLiteral("#e67e22");
-                    popup->setStyleSheet(
-                        QStringLiteral("QLabel {"
-                                       "  background: #2b2b2b;"
-                                       "  color: #e8e8e8;"
-                                       "  border: 1px solid %1;"
-                                       "  padding: 6px 8px;"
-                                       "  font-size: 11px;"
-                                       "}")
-                            .arg(borderCol));
+                    popup->setStyleSheet(QStringLiteral("QLabel {"
+                                                        "  background: #2b2b2b;"
+                                                        "  color: #e8e8e8;"
+                                                        "  border: 1px solid %1;"
+                                                        "  padding: 6px 8px;"
+                                                        "  font-size: 11px;"
+                                                        "}")
+                                             .arg(borderCol));
                     popup->setText(label + state._stateMessage.toHtmlEscaped());
                     popup->adjustSize();
 
                     QPoint globalPos;
                     if (auto *view = (scene() && !scene()->views().isEmpty())
-                                          ? scene()->views().first()
-                                          : nullptr) {
+                                         ? scene()->views().first()
+                                         : nullptr) {
                         globalPos = view->viewport()->mapToGlobal(
                             view->mapFromScene(event->scenePos()));
                     } else {
