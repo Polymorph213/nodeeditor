@@ -100,7 +100,14 @@ QString const &NodeGroup::name() const
 void NodeGroup::setGraphicsObject(std::unique_ptr<GroupGraphicsObject> &&graphics_object)
 {
     _groupGraphicsObject = std::move(graphics_object);
-    _groupGraphicsObject->lock(true);
+    // CICADA: do NOT auto-lock the brand-new group. The legacy
+    // setGraphicsObject called lock(true) here, which propagates
+    // node->lock(true) to every child via
+    // GroupGraphicsObject::lock(). That made every contained node
+    // non-movable from the moment the group was created — the user
+    // reported "I can't drag nodes inside the group; only the whole
+    // group drags". A fresh group is unlocked; the user opts in
+    // explicitly by double-clicking the group rectangle to lock it.
 }
 
 bool NodeGroup::empty() const

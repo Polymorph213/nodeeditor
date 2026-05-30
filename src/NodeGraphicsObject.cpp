@@ -299,16 +299,7 @@ QVariant NodeGraphicsObject::itemChange(GraphicsItemChange change, const QVarian
 
 void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
-    qDebug() << "NodeGO::mousePressEvent: node" << _nodeId
-             << "_locked=" << _locked
-             << "movable=" << (flags().testFlag(QGraphicsItem::ItemIsMovable))
-             << "selectable="
-             << (flags().testFlag(QGraphicsItem::ItemIsSelectable))
-             << "inGroup=" << (!_nodeGroup.expired())
-             << "btn=" << event->button();
     if (_locked) {
-        qDebug() << "NodeGO::mousePressEvent: node" << _nodeId
-                 << "is LOCKED — bailing without selecting";
         nodeScene()->clearSelection();
         return;
     }
