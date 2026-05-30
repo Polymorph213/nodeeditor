@@ -298,7 +298,29 @@ void GraphicsView::scaleUp()
     // already multi-pixel wide). Toggle AA off when zoomed in, on when
     // zoomed out. Safe: doesn't touch optimisation flags or scene index.
     setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
+}
+
+void GraphicsView::applyZoomCostMitigations()
+{
+    // CICADA perf: at high zoom, every NodeGraphicsObject's
+    // QGraphicsDropShadowEffect is the dominant frame cost. Qt renders
+    // the node to an offscreen buffer, runs a 20-px Gaussian blur, then
+    // blits. The cost is quadratic in screen-pixel area, so a 2× zoom
+    // makes the shadow ~4× more expensive per frame per visible node.
+    // Disable the effect when zoom >= 1.0 (the shadow is barely visible
+    // anyway at high zoom because the offset is fixed in scene units);
+    // re-enable when zoomed out. Same idea for AA above.
+    if (!scene())
+        return;
+    const bool effectsOn = transform().m11() < 1.0;
+    for (QGraphicsItem *it : scene()->items()) {
+        if (QGraphicsObject *obj = it->toGraphicsObject()) {
+            if (QGraphicsEffect *fx = obj->graphicsEffect())
+                fx->setEnabled(effectsOn);
+        }
+    }
 }
 
 void GraphicsView::scaleDown()
@@ -317,6 +339,7 @@ void GraphicsView::scaleDown()
 
     scale(factor, factor);
     setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
+    applyZoomCostMitigations();
     Q_EMIT scaleChanged(transform().m11());
 }
 
