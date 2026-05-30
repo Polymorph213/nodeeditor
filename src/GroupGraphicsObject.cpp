@@ -235,7 +235,6 @@ bool GroupGraphicsObject::contains(const QPointF &point) const
     for (NodeGraphicsObject *child : _group.childNodes()) {
         if (child &&
             child->mapRectToScene(child->boundingRect()).contains(scenePoint)) {
-            qDebug() << "GroupGO::contains -> false (node under cursor)";
             return false;
         }
     }

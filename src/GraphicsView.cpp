@@ -485,6 +485,19 @@ void GraphicsView::mousePressEvent(QMouseEvent *event)
     QGraphicsView::mousePressEvent(event);
     if (event->button() == Qt::LeftButton) {
         _clickPos = mapToScene(event->pos());
+        // CICADA diagnostic: log what items sit under the cursor so we
+        // can tell whether the click reached a NodeGraphicsObject, a
+        // GroupGraphicsObject, or empty canvas.
+        if (scene()) {
+            QPointF const scenePos = mapToScene(event->pos());
+            QStringList ids;
+            for (QGraphicsItem *it : scene()->items(scenePos)) {
+                ids << QString::number(it->type()) + QStringLiteral("@Z")
+                       + QString::number(it->zValue());
+            }
+            qDebug() << "GraphicsView LEFT-PRESS at" << event->pos()
+                     << "items(scenePos)=" << ids.join(QStringLiteral(","));
+        }
     }
 }
 
