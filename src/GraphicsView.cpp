@@ -59,6 +59,19 @@ GraphicsView::GraphicsView(QWidget *parent)
     setCacheMode(QGraphicsView::CacheBackground);
     setViewportUpdateMode(QGraphicsView::BoundingRectViewportUpdate);
 
+    // CICADA perf: at zoom > 1 the antialiased grid + thicker connection
+    // strokes start dominating frame time (millions of subpixel AA fills
+    // along the now-magnified lines). DontAdjustForAntialiasing skips
+    // Qt's adjustment for AA expose rect expansion, and DontSavePainterState
+    // halves the per-item paint overhead. Both are safe-default flags.
+    setOptimizationFlags(QGraphicsView::DontSavePainterState
+                         | QGraphicsView::DontAdjustForAntialiasing);
+    // NoIndex scene tree wins when items move + zoom continuously — Qt's
+    // BspTreeIndex re-balances on every transform and was visible in the
+    // profile while panning + zooming.
+    if (scene())
+        scene()->setItemIndexMethod(QGraphicsScene::NoIndex);
+
     setScaleRange(0.3, 2);
 
     // Sets the scene rect to its maximum possible ranges to avoid autu scene range
@@ -294,6 +307,12 @@ void GraphicsView::scaleUp()
     }
 
     scale(factor, factor);
+    // CICADA perf: at high zoom AA antialiased lines dominate paint cost
+    // (every screen pixel along a connection's spline goes through
+    // sub-pixel coverage computation). Magnified geometry already looks
+    // smooth without AA, so toggle it off above ~1.0× — the editor stops
+    // chugging when you zoom in to inspect a node.
+    setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
     Q_EMIT scaleChanged(transform().m11());
 }
 
@@ -312,6 +331,9 @@ void GraphicsView::scaleDown()
     }
 
     scale(factor, factor);
+    // Restore AA when we leave the high-zoom range — at < 1.0× the lines
+    // are 1-pixel wide and AA is what makes them readable.
+    setRenderHint(QPainter::Antialiasing, transform().m11() < 1.0);
     Q_EMIT scaleChanged(transform().m11());
 }
 
