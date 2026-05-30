@@ -206,6 +206,15 @@ protected:
     /// rectangle for clicks meant for an enclosed node.
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
 
+    /// CICADA: hit-test returns false when the point lies inside any
+    /// member node's bounding rect. Makes the group rectangle act
+    /// "transparent" wherever a node is — Qt then picks the node as
+    /// the topmost item there, regardless of any BSP-cache weirdness
+    /// or proxy-widget sub-item interference. The group is still
+    /// clickable on its empty interior margins (where moveNodes can
+    /// drag the whole group).
+    bool contains(const QPointF &point) const override;
+
     /** @copydoc QGraphicsItem::mouseMoveEvent() */
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
 

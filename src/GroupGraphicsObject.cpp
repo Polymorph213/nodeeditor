@@ -205,15 +205,11 @@ void GroupGraphicsObject::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 
 void GroupGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
-    // CICADA: forward the press to a node if one sits at higher Z
-    // under the cursor. The Z-order assignment (group at -10, nodes
-    // at 0) should already make Qt's hit-test pick the node first,
-    // but stale BSP caches + the node's embedded QGraphicsProxyWidget
-    // sub-items occasionally let the GROUP rectangle win the press.
-    // Result: clicking on a node inside a group selected the group
-    // and dragged everything. Explicitly checking items(scenePos)
-    // and ignoring the event when a NodeGraphicsObject is present
-    // forces the click to propagate to that node.
+    // CICADA: belt-and-suspenders with contains(). If we ever do
+    // receive a press here AND a member node sits at that scene
+    // position, ignore the event so Qt's grabber doesn't latch onto
+    // the group. contains() above is what stops Qt from delivering
+    // this event in the first place in normal scenarios.
     if (scene()) {
         for (QGraphicsItem *item : scene()->items(event->scenePos())) {
             if (item == this) {
@@ -226,6 +222,26 @@ void GroupGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
         }
     }
     QGraphicsItem::mousePressEvent(event);
+}
+
+bool GroupGraphicsObject::contains(const QPointF &point) const
+{
+    // Convert the local point to scene coords and check every member
+    // node. If the point lies inside any node's scene rect, return
+    // false — Qt's hit-test will then skip the group at this point
+    // and pick the node as the topmost item. This sidesteps the
+    // QGraphicsRectItem default behavior of containing every point
+    // inside the bounding rectangle, which was the root cause of
+    // "click on node-inside-group drags the whole group" reports.
+    QPointF const scenePoint = const_cast<GroupGraphicsObject *>(this)
+                                   ->mapToScene(point);
+    for (NodeGraphicsObject *child : _group.childNodes()) {
+        if (child &&
+            child->mapRectToScene(child->boundingRect()).contains(scenePoint)) {
+            return false;
+        }
+    }
+    return QGraphicsRectItem::contains(point);
 }
 
 void GroupGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
