@@ -215,6 +215,12 @@ protected:
     /// drag the whole group).
     bool contains(const QPointF &point) const override;
 
+    /// CICADA: backstop for Qt paths that call shape() instead of
+    /// contains(). Returns the full bounding rect MINUS every member
+    /// node's rect. Same effect as contains(): the group is hit only
+    /// in the empty margins.
+    QPainterPath shape() const override;
+
     /** @copydoc QGraphicsItem::mouseMoveEvent() */
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
 

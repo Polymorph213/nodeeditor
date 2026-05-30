@@ -229,19 +229,39 @@ bool GroupGraphicsObject::contains(const QPointF &point) const
     // Convert the local point to scene coords and check every member
     // node. If the point lies inside any node's scene rect, return
     // false — Qt's hit-test will then skip the group at this point
-    // and pick the node as the topmost item. This sidesteps the
-    // QGraphicsRectItem default behavior of containing every point
-    // inside the bounding rectangle, which was the root cause of
-    // "click on node-inside-group drags the whole group" reports.
+    // and pick the node as the topmost item.
     QPointF const scenePoint = const_cast<GroupGraphicsObject *>(this)
                                    ->mapToScene(point);
     for (NodeGraphicsObject *child : _group.childNodes()) {
         if (child &&
             child->mapRectToScene(child->boundingRect()).contains(scenePoint)) {
+            qDebug() << "GroupGO::contains -> false (node under cursor)";
             return false;
         }
     }
     return QGraphicsRectItem::contains(point);
+}
+
+QPainterPath GroupGraphicsObject::shape() const
+{
+    // Build a shape that EXCLUDES every member node's rect from the
+    // group's bounding rectangle. Qt code paths that consult shape()
+    // (e.g. some collision / hover queries) then treat the area over
+    // each node as NOT being part of the group — Qt's hit-test
+    // delivers the press to the node instead.
+    QPainterPath outer;
+    outer.addRect(boundingRect());
+    QPainterPath holes;
+    for (NodeGraphicsObject *child : _group.childNodes()) {
+        if (!child) {
+            continue;
+        }
+        QRectF const nodeSceneRect =
+            child->mapRectToScene(child->boundingRect());
+        QRectF const nodeLocalRect = mapRectFromScene(nodeSceneRect);
+        holes.addRect(nodeLocalRect);
+    }
+    return outer.subtracted(holes);
 }
 
 void GroupGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
