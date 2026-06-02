@@ -537,12 +537,27 @@ void GraphicsView::mouseReleaseEvent(QMouseEvent *event)
             if (scene) {
                 const QPointF scenePos = mapToScene(event->pos());
                 GroupGraphicsObject *groupGo = nullptr;
+                NodeGraphicsObject *nodeGo = nullptr;
                 for (QGraphicsItem *item : items(event->pos())) {
                     if (auto *g =
                             qgraphicsitem_cast<GroupGraphicsObject *>(item)) {
                         groupGo = g;
                         break;
                     }
+                    if (auto *n =
+                            qgraphicsitem_cast<NodeGraphicsObject *>(item)) {
+                        nodeGo = n;
+                    }
+                }
+                // CICADA: when the right-click landed on a NODE (and not
+                // a group frame), do NOT show the std QtNodes menu here
+                // — NodeEditor's eventFilter receives the same release
+                // as a ContextMenu event and shows its OWN merged menu
+                // (Preview On/Off + Disable + Add to group + Copy/Cut).
+                // Showing both menus on the same right-click produced
+                // the duplicated-context-menu the user reported.
+                if (nodeGo && !groupGo) {
+                    return;
                 }
                 QMenu *menu = groupGo
                                   ? scene->createGroupMenu(scenePos, groupGo)
