@@ -66,8 +66,17 @@ NodeId DataFlowGraphModel::addNode(QString const nodeType)
     if (model) {
         NodeId newId = newNodeId();
 
+        // CICADA: `this` is the CONTEXT object, not decoration. Without it
+        // the 3-arg connect() is a DIRECT connection, so the lambda runs on
+        // whichever thread emitted dataUpdated - and onOutPortDataUpdated()
+        // walks the graph and cascades into downstream nodes. With a node
+        // computing off the GUI thread (ADR-0051) that would drive the whole
+        // cascade from a worker. Passing the context makes it AutoConnection
+        // relative to this model, so a cross-thread emit is queued to the GUI
+        // thread. The portsAboutToBeDeleted connect below already does this.
         connect(model.get(),
                 &NodeDelegateModel::dataUpdated,
+                this,
                 [newId, this](PortIndex const portIndex) {
                     onOutPortDataUpdated(newId, portIndex);
                 });
@@ -613,8 +622,10 @@ void DataFlowGraphModel::loadNode(QJsonObject const &nodeJson)
     std::unique_ptr<NodeDelegateModel> model = _registry->create(delegateModelName);
 
     if (model) {
+        // CICADA: context object required - see the note in addNode().
         connect(model.get(),
                 &NodeDelegateModel::dataUpdated,
+                this,
                 [restoredNodeId, this](PortIndex const portIndex) {
                     onOutPortDataUpdated(restoredNodeId, portIndex);
                 });
