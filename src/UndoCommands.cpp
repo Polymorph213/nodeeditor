@@ -449,6 +449,29 @@ QJsonObject PasteCommand::makeNewNodeIdsInScene(QJsonObject const &sceneJson)
         // Replace NodeId in json
         nodeJson["id"] = static_cast<qint64>(newNodeId);
 
+        // CICADA: drop the node's persistent identity so the copy gets its
+        // own.
+        //
+        // A CicadaNodeBase carries a `nodeUuid`, and that uuid — not the
+        // QtNodes NodeId remapped above — is what XcafInstanceId keys a
+        // displayed instance by. Pasting kept it, so a duplicated node
+        // published under the SAME instance identity as its original:
+        // both copies collapsed onto one bridge instance and one mesh
+        // overlay, so editing a sub-object of one copy changed every
+        // copy, and the wireframe overlay could only ever sit on one of
+        // them.
+        //
+        // Removing the key is what makes the copy distinct: loadInternal
+        // only restores a uuid when the json carries one, so without it
+        // the freshly constructed node keeps the QUuid::createUuid() its
+        // member initialiser gave it. Saving and undo are unaffected —
+        // they must keep identity, and they do not come through here.
+        QJsonObject internalData = nodeJson["internal-data"].toObject();
+        if (internalData.contains("nodeUuid")) {
+            internalData.remove("nodeUuid");
+            nodeJson["internal-data"] = internalData;
+        }
+
         newNodesJsonArray.append(nodeJson);
     }
 
