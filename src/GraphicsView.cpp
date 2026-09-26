@@ -189,13 +189,9 @@ void GraphicsView::setScene(BasicGraphicsScene *scene)
         addAction(_pasteAction);
     }
 
-    auto undoAction = scene->undoStack().createUndoAction(this, tr("&Undo"));
-    undoAction->setShortcuts(QKeySequence::Undo);
-    addAction(undoAction);
-
-    auto redoAction = scene->undoStack().createRedoAction(this, tr("&Redo"));
-    redoAction->setShortcuts(QKeySequence::Redo);
-    addAction(redoAction);
+    // CICADA: no Undo/Redo actions here. The scene's own QUndoStack
+    // is not the document history -- OCAFManager is (ADR-0004), and
+    // Ctrl+Z / Ctrl+Y reach it through the host's key handling.
 }
 
 void GraphicsView::centerScene()
