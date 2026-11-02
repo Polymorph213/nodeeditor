@@ -12,9 +12,14 @@
 #include "NodeDelegateModel.hpp"
 #include "NodeGraphicsObject.hpp"
 #include "cicada/util/CommandTrace.h" // CICADA: command trace (ADR-1495)
+#include "cicada/util/WidgetResidency.h" // CICADA: live widgets (ADR-1620)
 
 #include <QAccessible> // CICADA: quiet the platform bridge while a node is built
+#include <QApplication>
 #include <QColorDialog> // CICADA group polish: pick group fill color
+#include <QElapsedTimer>
+#include <QGraphicsView>
+#include <QTimer>
 #include <QUndoStack>
 
 #include <QHeaderView>
@@ -36,11 +41,13 @@
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
 #include <queue>
+#include <vector>
 
 namespace {
 
@@ -179,6 +186,14 @@ BasicGraphicsScene::BasicGraphicsScene(AbstractGraphModel &graphModel, QObject *
     connect(this, &BasicGraphicsScene::nodeClicked, this, &BasicGraphicsScene::onNodeClicked);
 
     connect(&_graphModel, &AbstractGraphModel::modelReset, this, &BasicGraphicsScene::onModelReset);
+
+    // CICADA (ADR-1620): one timer for the residency passes.
+    _residencyTimer = new QTimer(this);
+    _residencyTimer->setSingleShot(true);
+    connect(_residencyTimer, &QTimer::timeout, this, [this]() {
+        if (updateWidgetResidency(false))
+            scheduleWidgetResidency(0);
+    });
 
     traverseGraphAndPopulateGraphicsObjects();
 }
@@ -379,6 +394,8 @@ void BasicGraphicsScene::traverseGraphAndPopulateGraphicsObjects()
             }
         }
     }
+
+    scheduleWidgetResidency(0);
 }
 
 void BasicGraphicsScene::updateAttachedNodes(ConnectionId const connectionId,
@@ -440,6 +457,10 @@ void BasicGraphicsScene::onNodeCreated(NodeId const nodeId)
         _nodeGraphicsObjects[nodeId] = std::make_unique<NodeGraphicsObject>(*this, nodeId);
     }
 
+    // CICADA (ADR-1620): after the command or the load that made it, so that
+    // a hundred nodes made together are one pass.
+    scheduleWidgetResidency(0);
+
     Q_EMIT modified(this);
 }
 
@@ -464,8 +485,212 @@ bool BasicGraphicsScene::hasVisibleView() const
 
 void BasicGraphicsScene::embedPendingWidgets()
 {
+    // CICADA (ADR-1620): a window for every node is the wall of ADR-1519, and
+    // a node draws its widget without one. The view that is shown, and the
+    // render of the scene, need none: the passes give windows to the nodes a
+    // person can use.
+    if (cicada::widgetresidency::enabled()) {
+        scheduleWidgetResidency(0);
+        return;
+    }
     for (auto &entry : _nodeGraphicsObjects)
         entry.second->embedPendingWidget();
+}
+
+QWidget *BasicGraphicsScene::widgetLimbo()
+{
+    if (!_limbo)
+        _limbo = std::make_unique<QWidget>();
+    return _limbo.get();
+}
+
+void BasicGraphicsScene::noteWidgetEmbedded(bool sizeChanged)
+{
+    ++_embeds;
+    if (sizeChanged)
+        ++_embedSizeChanges;
+}
+
+BasicGraphicsScene::WidgetResidencyStats BasicGraphicsScene::widgetResidencyStats() const
+{
+    WidgetResidencyStats stats;
+    for (auto const &entry : _nodeGraphicsObjects) {
+        if (entry.second->hasLiveWidget())
+            ++stats.live;
+        else if (entry.second->hasPendingWidget())
+            ++stats.pending;
+    }
+    stats.cap = cicada::widgetresidency::liveCap();
+    stats.minScale = cicada::widgetresidency::minScale();
+    stats.embeds = _embeds;
+    stats.releases = _releases;
+    stats.sizeChanges = _embedSizeChanges;
+    stats.passes = _residencyPasses;
+    stats.lastPassMs = _lastPassMs;
+    return stats;
+}
+
+void BasicGraphicsScene::scheduleWidgetResidency(int delayMs)
+{
+    if (!cicada::widgetresidency::enabled() || _residencyTimer == nullptr)
+        return;
+    if (!_residencyTimer->isActive() || _residencyTimer->remainingTime() > delayMs)
+        _residencyTimer->start(delayMs);
+}
+
+void BasicGraphicsScene::flushWidgetResidency()
+{
+    if (!cicada::widgetresidency::enabled())
+        return;
+    if (_residencyTimer != nullptr)
+        _residencyTimer->stop();
+    while (updateWidgetResidency(true)) {
+    }
+}
+
+void BasicGraphicsScene::noteViewPainted(QGraphicsView const *view)
+{
+    if (!cicada::widgetresidency::enabled() || view == nullptr)
+        return;
+    QRectF const area = view->mapToScene(view->viewport()->rect()).boundingRect();
+    double const scale = view->transform().m11();
+    if (area == _seenViewArea && scale == _seenViewScale)
+        return;
+    _seenViewArea = area;
+    _seenViewScale = scale;
+    // A pan or a zoom is a stream of paints: the first starts a pass, the
+    // rest find it waiting. The nodes that came into view are drawn from their
+    // widgets until it gets to them.
+    scheduleWidgetResidency(60);
+}
+
+bool BasicGraphicsScene::updateWidgetResidency(bool unlimited)
+{
+    if (!cicada::widgetresidency::enabled())
+        return false;
+    // A combo box's list is a pop-up of the widget a node holds: no window is
+    // taken away or made under it.
+    if (QApplication::activePopupWidget() != nullptr) {
+        scheduleWidgetResidency(250);
+        return false;
+    }
+
+    CICADA_TRACE_AS(Ui, "QtNodes.widgetResidency");
+    QElapsedTimer clock;
+    clock.start();
+    ++_residencyPasses;
+
+    // What the views show: the area a node is made live in (the view and a
+    // quarter of it more on each side, so a pan finds them ready), and the
+    // larger one it keeps its window in (a node does not flicker at an edge).
+    QRectF embedArea;
+    QRectF keepArea;
+    QPointF centre;
+    bool shown = false;
+    bool readable = false;
+    for (QGraphicsView const *view : views()) {
+        if (!view->isVisible())
+            continue;
+        QRectF const seen = view->mapToScene(view->viewport()->rect()).boundingRect();
+        double const w = seen.width();
+        double const h = seen.height();
+        embedArea = embedArea.united(seen.adjusted(-0.25 * w, -0.25 * h, 0.25 * w, 0.25 * h));
+        keepArea = keepArea.united(seen.adjusted(-1.0 * w, -1.0 * h, 1.0 * w, 1.0 * h));
+        if (!shown)
+            centre = seen.center();
+        shown = true;
+        readable = readable || view->transform().m11() >= cicada::widgetresidency::minScale();
+    }
+    if (!shown) {
+        _lastPassMs = clock.nsecsElapsed() / 1.0e6;
+        return false;
+    }
+
+    struct Candidate
+    {
+        double distance;
+        NodeGraphicsObject *node;
+        bool live;
+    };
+    std::vector<Candidate> wanted;
+    int pinned = 0;
+    for (auto const &entry : _nodeGraphicsObjects) {
+        NodeGraphicsObject *const node = entry.second.get();
+        if (node->hasLiveWidget()) {
+            if (node->widgetPinned()) {
+                ++pinned;
+                continue;
+            }
+            QRectF const r = node->sceneBoundingRect();
+            if (r.intersects(keepArea)) {
+                QPointF const d = r.center() - centre;
+                wanted.push_back({d.x() * d.x() + d.y() * d.y(), node, true});
+            } else {
+                wanted.push_back({-1.0, node, true}); // out of the keep area
+            }
+        } else if (readable && node->hasPendingWidget()) {
+            QRectF const r = node->sceneBoundingRect();
+            if (r.intersects(embedArea)) {
+                QPointF const d = r.center() - centre;
+                wanted.push_back({d.x() * d.x() + d.y() * d.y(), node, false});
+            }
+        }
+    }
+
+    // The nearest to the centre keep or get a window, up to the cap; a live
+    // node outside the keep area never does.
+    std::sort(wanted.begin(), wanted.end(), [](Candidate const &a, Candidate const &b) {
+        bool const aOut = a.distance < 0.0;
+        bool const bOut = b.distance < 0.0;
+        if (aOut != bOut)
+            return bOut;
+        return a.distance < b.distance;
+    });
+    int const room = std::max(0, cicada::widgetresidency::liveCap() - pinned);
+    std::vector<NodeGraphicsObject *> release;
+    std::vector<NodeGraphicsObject *> embed;
+    int taken = 0;
+    for (Candidate const &c : wanted) {
+        bool const out = c.distance < 0.0;
+        if (!out && taken < room) {
+            ++taken;
+            if (!c.live)
+                embed.push_back(c.node);
+        } else if (c.live) {
+            release.push_back(c.node);
+        }
+    }
+
+    // Windows given back first, so the process never holds more than the cap
+    // and what is pinned. The pass stops at its time limit and asks for
+    // another: input and paints get their turn between.
+    constexpr double kPassBudgetMs = 30.0;
+    bool more = false;
+    QElapsedTimer work; // the limit counts what is done, not what was planned
+    work.start();
+    int done = 0;
+    for (NodeGraphicsObject *node : release) {
+        if (!unlimited && done > 0 && work.nsecsElapsed() / 1.0e6 > kPassBudgetMs) {
+            more = true;
+            break;
+        }
+        if (node->releaseWidget()) {
+            ++_releases;
+            ++done;
+        }
+    }
+    if (!more) {
+        for (NodeGraphicsObject *node : embed) {
+            if (!unlimited && done > 0 && work.nsecsElapsed() / 1.0e6 > kPassBudgetMs) {
+                more = true;
+                break;
+            }
+            node->embedPendingWidget();
+            ++done;
+        }
+    }
+    _lastPassMs = clock.nsecsElapsed() / 1.0e6;
+    return more;
 }
 
 void BasicGraphicsScene::onNodeUpdated(NodeId const nodeId)

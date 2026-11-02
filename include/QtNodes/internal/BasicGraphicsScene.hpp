@@ -20,6 +20,9 @@
 #include <unordered_map>
 
 class QUndoStack;
+class QTimer;
+class QWidget;
+class QGraphicsView;
 
 namespace QtNodes {
 
@@ -111,7 +114,50 @@ public:
     /// CICADA (ADR-1500): gives every node whose widget waits for a view its
     /// proxy and native window. A view calls it when it is shown; a caller
     /// that renders the scene without a view calls it first.
+    /// CICADA (ADR-1620): with residency on it gives nothing to every node: a
+    /// node draws its widget without a window, and the scene schedules the
+    /// windows of the nodes a view shows (widgetResidency).
     void embedPendingWidgets();
+
+    /// CICADA (ADR-1620): what the live widgets of the nodes come to.
+    struct WidgetResidencyStats
+    {
+        int live = 0;       ///< nodes with a native window now
+        int pending = 0;    ///< nodes that hold a widget without one
+        int cap = 0;        ///< most live nodes
+        double minScale = 0.0; ///< smallest view scale at which a node gets one
+        unsigned long long embeds = 0;       ///< windows made since the scene began
+        unsigned long long releases = 0;     ///< windows given back
+        unsigned long long sizeChanges = 0;  ///< embeds that moved the node's size
+        unsigned long long passes = 0;       ///< residency passes run
+        double lastPassMs = 0.0;             ///< the last pass, wall
+    };
+
+    /// CICADA (ADR-1620): walks the nodes once for the counts.
+    WidgetResidencyStats widgetResidencyStats() const;
+
+    /// CICADA (ADR-1620): runs a residency pass after `delayMs`, or sooner if
+    /// one is waiting already. Called when a node is made, a view is shown, or
+    /// a view's area or scale moved.
+    void scheduleWidgetResidency(int delayMs);
+
+    /// CICADA (ADR-1620): runs the passes the scene has to run now, with no
+    /// time limit, so that the windows are those of the view as it stands.
+    /// A caller that measures or compares calls it after it moved a view.
+    void flushWidgetResidency();
+
+    /// CICADA (ADR-1620): a view painted; schedules a pass when its area or
+    /// scale is not the one the last pass saw.
+    void noteViewPainted(QGraphicsView const *view);
+
+    /// CICADA (ADR-1620): a node gave its widget a window; `sizeChanged` says
+    /// whether that moved the node's size.
+    void noteWidgetEmbedded(bool sizeChanged);
+
+    /// CICADA (ADR-1620): the widget a released node widget is made a child of
+    /// and a top-level widget again, which frees its window and backing store.
+    /// Never shown.
+    QWidget *widgetLimbo();
 
     /**
      * @brief Creates a list of the connections that are incident only to nodes within a
@@ -261,6 +307,12 @@ private:
     /// Redraws adjacent nodes for given `connectionId`
     void updateAttachedNodes(ConnectionId const connectionId, PortType const portType);
 
+    /// CICADA (ADR-1620): one residency pass. Embeds the nodes a view shows,
+    /// nearest to the view's centre first, and releases those it no longer
+    /// shows. Stops after a time limit unless `unlimited`.
+    /// @returns whether there is more to do.
+    bool updateWidgetResidency(bool unlimited);
+
     /**
      * @brief Loads a JSON object that represents a node, with the option
      * to keep the stored node id or generate a new one.
@@ -324,6 +376,17 @@ private:
     QUndoStack *_undoStack;
     Qt::Orientation _orientation;
     bool _groupingEnabled;
+
+    // CICADA (ADR-1620): live widgets of the nodes.
+    QTimer *_residencyTimer = nullptr;
+    std::unique_ptr<QWidget> _limbo;
+    QRectF _seenViewArea;
+    double _seenViewScale = 0.0;
+    unsigned long long _embeds = 0;
+    unsigned long long _releases = 0;
+    unsigned long long _embedSizeChanges = 0;
+    unsigned long long _residencyPasses = 0;
+    double _lastPassMs = 0.0;
 };
 
 } // namespace QtNodes

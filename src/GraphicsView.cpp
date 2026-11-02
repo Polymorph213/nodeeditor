@@ -625,6 +625,15 @@ void GraphicsView::showEvent(QShowEvent *event)
     centerScene();
 }
 
+void GraphicsView::paintEvent(QPaintEvent *event)
+{
+    QGraphicsView::paintEvent(event);
+
+    // CICADA (ADR-1620): every pan, zoom, fit and resize ends in a paint.
+    if (auto *basic = nodeScene())
+        basic->noteViewPainted(this);
+}
+
 BasicGraphicsScene *GraphicsView::nodeScene()
 {
     return dynamic_cast<BasicGraphicsScene *>(scene());
