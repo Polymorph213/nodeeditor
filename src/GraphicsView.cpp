@@ -95,6 +95,9 @@ QAction *GraphicsView::deleteSelectionAction() const
 void GraphicsView::setScene(BasicGraphicsScene *scene)
 {
     QGraphicsView::setScene(scene);
+    // CICADA (ADR-1500): a view that is shown already makes the widgets real.
+    if (scene && isVisible())
+        scene->embedPendingWidgets();
     if (!scene) {
         // Clear actions.
         delete _clearSelectionAction;
@@ -611,6 +614,12 @@ void GraphicsView::drawBackground(QPainter *painter, const QRectF &r)
 
 void GraphicsView::showEvent(QShowEvent *event)
 {
+    // CICADA (ADR-1500): nodes built while no view showed the scene have no
+    // window for their widget yet. Before the base class lays the view out and
+    // centerScene() measures the items, whose sizes can move.
+    if (auto *basic = nodeScene())
+        basic->embedPendingWidgets();
+
     QGraphicsView::showEvent(event);
 
     centerScene();

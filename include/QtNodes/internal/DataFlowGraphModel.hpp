@@ -138,6 +138,11 @@ private:
 
     std::unordered_set<ConnectionId> _connectivity;
 
+    /// _connectivity by node: each wire sits under both of its ends. A wire
+    /// query asks about one node, and scanning every wire of the document to
+    /// answer it made each query O(wires) and whole-graph passes O(n x wires).
+    std::unordered_map<NodeId, std::unordered_set<ConnectionId>> _wiresOfNode;
+
     mutable std::unordered_map<NodeId, NodeGeometryData> _nodeGeometryData;
 
     std::unordered_map<NodeId, QString> _labels;

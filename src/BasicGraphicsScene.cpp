@@ -11,7 +11,9 @@
 #include "GraphicsView.hpp"
 #include "NodeDelegateModel.hpp"
 #include "NodeGraphicsObject.hpp"
+#include "cicada/util/CommandTrace.h" // CICADA: command trace (ADR-1495)
 
+#include <QAccessible> // CICADA: quiet the platform bridge while a node is built
 #include <QColorDialog> // CICADA group polish: pick group fill color
 #include <QUndoStack>
 
@@ -46,6 +48,56 @@ using QtNodes::GroupId;
 using QtNodes::InvalidGroupId;
 using QtNodes::InvalidNodeId;
 using QtNodes::NodeId;
+
+/// CICADA_LEGACY_NODE_PATHS=1 puts the node graphics paths below back as they
+/// were before ADR-1468, so one build can be timed against itself.
+bool legacyNodePaths()
+{
+    static bool const legacy = qEnvironmentVariableIsSet("CICADA_LEGACY_NODE_PATHS");
+    return legacy;
+}
+
+/// While alive, accessibility events are dropped instead of being handed to the
+/// platform's accessibility bridge (ADR-1468).
+///
+/// A node's widgets are built inside its graphics object: every QLineEdit
+/// setText and QSpinBox setValue of its editor, and the proxy widget's show.
+/// With a UI Automation client listening, each of those is a call to
+/// UiaRaiseAutomationEvent about a widget no client has seen yet, and it is
+/// answered across a process boundary. In a sampled Polyline that was 28 % of
+/// the GUI thread's working time.
+class AccessibilityEventsPaused
+{
+public:
+    AccessibilityEventsPaused()
+    {
+#if QT_CONFIG(accessibility)
+        if (!legacyNodePaths()) {
+            _previous = QAccessible::installUpdateHandler(&AccessibilityEventsPaused::drop);
+            _installed = true;
+        }
+#endif
+    }
+
+    ~AccessibilityEventsPaused()
+    {
+#if QT_CONFIG(accessibility)
+        if (_installed)
+            QAccessible::installUpdateHandler(_previous);
+#endif
+    }
+
+    AccessibilityEventsPaused(AccessibilityEventsPaused const &) = delete;
+    AccessibilityEventsPaused &operator=(AccessibilityEventsPaused const &) = delete;
+
+private:
+#if QT_CONFIG(accessibility)
+    static void drop(QAccessibleEvent *) {}
+
+    QAccessible::UpdateHandler _previous = nullptr;
+    bool _installed = false;
+#endif
+};
 
 NodeId jsonValueToNodeId(QJsonValue const &value)
 {
@@ -307,7 +359,9 @@ void BasicGraphicsScene::traverseGraphAndPopulateGraphicsObjects()
 {
     auto allNodeIds = _graphModel.allNodeIds();
 
-    // First create all the nodes.
+    // First create all the nodes. Their widgets are built here, which is not
+    // worth an accessibility event each (see AccessibilityEventsPaused).
+    AccessibilityEventsPaused const quiet;
     for (NodeId const nodeId : allNodeIds) {
         _nodeGraphicsObjects[nodeId] = std::make_unique<NodeGraphicsObject>(*this, nodeId);
     }
@@ -357,6 +411,7 @@ void BasicGraphicsScene::onConnectionDeleted(ConnectionId const connectionId)
 
 void BasicGraphicsScene::onConnectionCreated(ConnectionId const connectionId)
 {
+    CICADA_TRACE_AS(Ui, "QtNodes.sceneConnectionCreated");
     _connectionGraphicsObjects[connectionId]
         = std::make_unique<ConnectionGraphicsObject>(*this, connectionId);
 
@@ -379,7 +434,11 @@ void BasicGraphicsScene::onNodeDeleted(NodeId const nodeId)
 
 void BasicGraphicsScene::onNodeCreated(NodeId const nodeId)
 {
-    _nodeGraphicsObjects[nodeId] = std::make_unique<NodeGraphicsObject>(*this, nodeId);
+    CICADA_TRACE_AS(Ui, "QtNodes.sceneNodeCreated");
+    {
+        AccessibilityEventsPaused const quiet;
+        _nodeGraphicsObjects[nodeId] = std::make_unique<NodeGraphicsObject>(*this, nodeId);
+    }
 
     Q_EMIT modified(this);
 }
@@ -394,6 +453,21 @@ void BasicGraphicsScene::onNodePositionUpdated(NodeId const nodeId)
     }
 }
 
+bool BasicGraphicsScene::hasVisibleView() const
+{
+    for (QGraphicsView const *view : views()) {
+        if (view->isVisible())
+            return true;
+    }
+    return false;
+}
+
+void BasicGraphicsScene::embedPendingWidgets()
+{
+    for (auto &entry : _nodeGraphicsObjects)
+        entry.second->embedPendingWidget();
+}
+
 void BasicGraphicsScene::onNodeUpdated(NodeId const nodeId)
 {
     auto node = nodeGraphicsObject(nodeId);
@@ -401,11 +475,20 @@ void BasicGraphicsScene::onNodeUpdated(NodeId const nodeId)
     if (node) {
         node->setGeometryChanged();
 
+        QSize const before = _nodeGeometry->size(nodeId);
         _nodeGeometry->recomputeSize(nodeId);
 
         node->updateQWidgetEmbedPos();
         node->update();
-        node->moveConnections();
+
+        // CICADA (ADR-1468): a wire ends on a port and a port sits where the
+        // node's size and port list put it, so a node whose size did not move
+        // (a new tint, a caption that still fits) has not moved its wires.
+        // Re-measuring every wire's port for such an update cost the node's
+        // degree: the world plane, one wire per object, took 12 % of the GUI
+        // thread's working time on a Box at 480 objects.
+        if (legacyNodePaths() || _nodeGeometry->size(nodeId) != before)
+            node->moveConnections();
     }
 }
 

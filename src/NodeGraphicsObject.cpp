@@ -10,6 +10,8 @@
 #include "NodeGroup.hpp"
 #include "StyleCollection.hpp"
 #include "UndoCommands.hpp"
+#include "cicada/util/CommandTrace.h" // CICADA: command trace (ADR-1495)
+#include "cicada/util/FixedCost.h"    // CICADA: fixed-cost switches (ADR-1500)
 #include <QString>
 
 #include <QtWidgets/QGraphicsEffect>
@@ -114,7 +116,7 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
 
     setZValue(0);
 
-    embedQWidget();
+    embedQWidget(true);
 
     nodeScene()->nodeGeometry().recomputeSize(_nodeId);
 
@@ -126,6 +128,13 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
         if (_nodeId == nodeId)
             setLockedState();
     });
+}
+
+NodeGraphicsObject::~NodeGraphicsObject()
+{
+    // CICADA (ADR-1500): a widget that never reached a proxy has no owner.
+    if (_proxyWidget == nullptr && !_unembedded.isNull())
+        _unembedded->deleteLater();
 }
 
 AbstractGraphModel &NodeGraphicsObject::graphModel() const
@@ -146,12 +155,61 @@ void NodeGraphicsObject::updateQWidgetEmbedPos()
     }
 }
 
-void NodeGraphicsObject::embedQWidget()
+void NodeGraphicsObject::embedPendingWidget()
 {
+    if (_proxyWidget != nullptr || _unembedded.isNull())
+        return;
+
+    // The widget is shown now, so its size may differ from the one the node
+    // was given without a window.
+    prepareGeometryChange();
+    embedQWidget(false);
+    update();
+    moveConnections();
+}
+
+bool NodeGraphicsObject::hasPendingWidget() const
+{
+    return _proxyWidget == nullptr && !_unembedded.isNull();
+}
+
+void NodeGraphicsObject::pendingWidgetChanged()
+{
+    if (!hasPendingWidget())
+        return;
+
+    // A widget with no proxy has nothing to follow its size: the node takes
+    // the size the widget has now, as the resize filter gives it once the
+    // widget is embedded.
+    prepareGeometryChange();
+    _unembedded->ensurePolished();
+    _unembedded->adjustSize();
+    nodeScene()->nodeGeometry().recomputeSize(_nodeId);
+    update();
+    moveConnections();
+}
+
+void NodeGraphicsObject::embedQWidget(bool mayDefer)
+{
+    CICADA_TRACE_AS(Ui, "QtNodes.embedQWidget");
     AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
     geometry.recomputeSize(_nodeId);
 
     if (auto w = _graphModel.nodeData(_nodeId, NodeRole::Widget).value<QWidget *>()) {
+        // CICADA (ADR-1500): QGraphicsProxyWidget::setWidget shows the widget,
+        // and Qt makes a native window for it (CreateWindowEx, 5 ms or more
+        // each). A scene no view shows needs none: the node is given the size
+        // its widget has, and the proxy waits for a view to show the scene.
+        if (mayDefer && cicada::fixedcost::enabled(cicada::fixedcost::Change::LazyNodeWidgets)
+            && !nodeScene()->hasVisibleView()) {
+            w->ensurePolished();
+            w->adjustSize();
+            geometry.recomputeSize(_nodeId);
+            _unembedded = w;
+            return;
+        }
+        _unembedded.clear();
+
         _proxyWidget = new QGraphicsProxyWidget(this);
 
         _proxyWidget->setWidget(w);

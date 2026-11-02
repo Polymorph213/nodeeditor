@@ -25,16 +25,9 @@ std::unordered_set<NodeId> DataFlowGraphModel::allNodeIds() const
 
 std::unordered_set<ConnectionId> DataFlowGraphModel::allConnectionIds(NodeId const nodeId) const
 {
-    std::unordered_set<ConnectionId> result;
+    auto const wires = _wiresOfNode.find(nodeId);
 
-    std::copy_if(_connectivity.begin(),
-                 _connectivity.end(),
-                 std::inserter(result, std::end(result)),
-                 [&nodeId](ConnectionId const &cid) {
-                     return cid.inNodeId == nodeId || cid.outNodeId == nodeId;
-                 });
-
-    return result;
+    return (wires == _wiresOfNode.end()) ? std::unordered_set<ConnectionId>{} : wires->second;
 }
 
 std::unordered_set<ConnectionId> DataFlowGraphModel::connections(NodeId nodeId,
@@ -43,8 +36,12 @@ std::unordered_set<ConnectionId> DataFlowGraphModel::connections(NodeId nodeId,
 {
     std::unordered_set<ConnectionId> result;
 
-    std::copy_if(_connectivity.begin(),
-                 _connectivity.end(),
+    auto const wires = _wiresOfNode.find(nodeId);
+    if (wires == _wiresOfNode.end())
+        return result;
+
+    std::copy_if(wires->second.begin(),
+                 wires->second.end(),
                  std::inserter(result, std::end(result)),
                  [&portType, &portIndex, &nodeId](ConnectionId const &cid) {
                      return (getNodeId(portType, cid) == nodeId
@@ -200,6 +197,8 @@ bool DataFlowGraphModel::connectionPossible(ConnectionId const connectionId) con
 void DataFlowGraphModel::addConnection(ConnectionId const connectionId)
 {
     _connectivity.insert(connectionId);
+    _wiresOfNode[connectionId.outNodeId].insert(connectionId);
+    _wiresOfNode[connectionId.inNodeId].insert(connectionId);
 
     sendConnectionCreation(connectionId);
 
@@ -520,6 +519,14 @@ bool DataFlowGraphModel::deleteConnection(ConnectionId const connectionId)
         disconnected = true;
 
         _connectivity.erase(it);
+        for (NodeId const end : {connectionId.outNodeId, connectionId.inNodeId}) {
+            auto const wires = _wiresOfNode.find(end);
+            if (wires != _wiresOfNode.end()) {
+                wires->second.erase(connectionId);
+                if (wires->second.empty())
+                    _wiresOfNode.erase(wires);
+            }
+        }
     }
 
     if (disconnected) {

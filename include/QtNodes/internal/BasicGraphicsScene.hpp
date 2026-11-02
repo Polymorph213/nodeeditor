@@ -105,6 +105,14 @@ public:
     /// Deletes all the nodes. Connections are removed automatically.
     void clearScene();
 
+    /// CICADA (ADR-1500): whether a view that shows this scene is visible.
+    bool hasVisibleView() const;
+
+    /// CICADA (ADR-1500): gives every node whose widget waits for a view its
+    /// proxy and native window. A view calls it when it is shown; a caller
+    /// that renders the scene without a view calls it first.
+    void embedPendingWidgets();
+
     /**
      * @brief Creates a list of the connections that are incident only to nodes within a
      * given group.

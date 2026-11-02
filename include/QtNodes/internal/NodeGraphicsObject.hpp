@@ -4,9 +4,11 @@
 #include "NodeGroup.hpp"
 #include "NodeState.hpp"
 #include <QIcon>
+#include <QPointer>
 #include <QRectF>
 #include <QtCore/QUuid>
 #include <QtWidgets/QGraphicsObject>
+#include <QtWidgets/QWidget>
 
 #include "Export.hpp"
 #include "NodeState.hpp"
@@ -33,7 +35,7 @@ public:
 public:
     NodeGraphicsObject(BasicGraphicsScene &scene, NodeId node);
 
-    ~NodeGraphicsObject() override = default;
+    ~NodeGraphicsObject() override;
 
 public:
     AbstractGraphModel &graphModel() const;
@@ -63,6 +65,19 @@ public:
     void lock(bool locked);
 
     void updateQWidgetEmbedPos();
+
+    /// CICADA (ADR-1500): gives the node's widget its proxy, and with it
+    /// its native window, when the node was built while no view showed the
+    /// scene. Does nothing for a node whose widget is embedded already.
+    void embedPendingWidget();
+
+    /// CICADA (ADR-1500): whether the node's widget waits for a view (it has
+    /// no proxy yet).
+    bool hasPendingWidget() const;
+
+    /// CICADA (ADR-1500): the widget of a node that has no proxy changed
+    /// (its style sheet, say): the node takes the size the widget now has.
+    void pendingWidgetChanged();
 
     /// Saves node in a QJsonObject save file.
     QJsonObject save() const;
@@ -107,7 +122,9 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void embedQWidget();
+    /// \param mayDefer Whether the proxy may wait until a view shows the
+    ///        scene (ADR-1500). False embeds now.
+    void embedQWidget(bool mayDefer);
     void setLockedState();
 
 private:
@@ -125,6 +142,10 @@ private:
 
     // either nullptr or owned by parent QGraphicsItem
     QGraphicsProxyWidget *_proxyWidget;
+
+    // CICADA (ADR-1500): the node's widget while it has no proxy. Nothing
+    // owns it then, so the destructor does.
+    QPointer<QWidget> _unembedded;
 
     std::weak_ptr<NodeGroup> _nodeGroup{};
 };
