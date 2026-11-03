@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 
 namespace QtNodes {
 
@@ -82,7 +83,13 @@ struct Measured {
   int height = 0;
   int labelWidth = 0;
   int controlWidth = 0;
+  /// The width of the row's cell: the node's (RowSpec::cellWidth), else the
+  /// label and the control.
+  int cell = 0;
   int indent = 0;
+  /// The node's insets of the row (RowSpec::insetLeft, insetRight).
+  int insetLeft = 0;
+  int insetRight = 0;
   bool twoColumn = false;
   bool natural = false;
   /// The row asked to sit on the line of the row before it (kRowJoined).
@@ -110,7 +117,7 @@ int naturalLineWidth(const std::vector<Measured> &shown, const Line &line,
   int width = gap * static_cast<int>(line.count - 1U);
   for (std::size_t k = 0; k < line.count; ++k) {
     const Measured &m = shown[line.first + k];
-    width += m.labelWidth + m.controlWidth;
+    width += m.cell;
   }
   return width;
 }
@@ -136,6 +143,11 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
   out.toggles = face.sectionToggles();
   out.metrics = &metrics;
   out.nominal = text.nominal();
+  // A face with no row is as big as its legacy widget was, else nothing
+  // (ADR-1832): never the -1 x -1 of a default QSize, which a node's height
+  // would add as an unsigned number.
+  const QSize least = face.minBodySize();
+  out.size = QSize(std::max(0, least.width()), std::max(0, least.height()));
 
   const std::shared_ptr<const std::vector<RowSpec>> rowsPtr = face.rows();
   if (!rowsPtr) {
@@ -166,10 +178,17 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     m.height = rowHeightOf(spec, *m.ops, metrics, compact);
     m.labelWidth = m.ops->labelWidth(text, metrics, spec);
     m.controlWidth = m.ops->controlWidth(text, metrics, spec);
+    m.cell = (spec.cellWidth != 0U)
+                 ? static_cast<int>(spec.cellWidth)
+                 : (m.labelWidth + m.controlWidth);
     m.indent = inSection ? metrics.sectionIndent : 0;
+    m.insetLeft = static_cast<int>(spec.insetLeft);
+    m.insetRight = static_cast<int>(spec.insetRight);
     m.section = inSection ? static_cast<std::size_t>(spec.section) : 0U;
-    m.joined = !compact && ((spec.flags & kRowJoined) != 0U) &&
-               !shown.empty() && (shown.back().section == m.section);
+    // A port-aligned face may join a row too (ADR-1833): the joined row has
+    // no port line of its own and shares that of the row before it.
+    m.joined = ((spec.flags & kRowJoined) != 0U) && !shown.empty() &&
+               (shown.back().section == m.section);
     shown.push_back(m);
   }
   if (shown.empty()) {
@@ -192,6 +211,9 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     for (std::size_t k = 0; k < line.count; ++k) {
       line.height = std::max(line.height, shown[line.first + k].height);
     }
+    // A line stands where its first row's left and its last row's right
+    // inset put it (ADR-1850).
+    shown[line.first].insetRight = shown[line.first + line.count - 1U].insetRight;
   }
   // A face may state the margin and the gap of the legacy widget's layout
   // (ADR-1806); a line of several rows then uses the gap sideways too.
@@ -227,8 +249,9 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
         shown[line.first + k].natural = true;
         shown[line.first + k].twoColumn = false;
       }
-      spanWidth = std::max(
-          spanWidth, head.indent + naturalLineWidth(shown, line, joinGap));
+      spanWidth = std::max(spanWidth,
+                           head.indent + head.insetLeft + head.insetRight +
+                               naturalLineWidth(shown, line, joinGap));
       continue;
     }
     const RowSpec &spec = specs[static_cast<std::size_t>(head.index)];
@@ -242,10 +265,12 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
       Columns &col = columns[head.section];
       col.label = std::max(col.label, head.labelWidth);
       col.field = std::max(col.field, head.controlWidth);
-      col.indent = std::max(col.indent, head.indent);
+      col.indent = std::max(
+          col.indent, head.indent + head.insetLeft + head.insetRight);
     } else {
       spanWidth = std::max(spanWidth,
-                           head.indent + head.labelWidth + head.controlWidth);
+                           head.indent + head.insetLeft + head.insetRight +
+                               head.labelWidth + head.controlWidth);
     }
   }
 
@@ -259,16 +284,27 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
   }
   // The least width of the body is the width of the rows too: the rows of a
   // line share what the legacy widget had beyond its hint (ADR-1806).
-  const QSize least = face.minBodySize();
-  innerWidth = std::max(innerWidth, least.width() - marginLeft - marginRight);
+  if (face.exactBodyWidth() && (least.width() > 0)) {
+    innerWidth = std::max(0, least.width() - marginLeft - marginRight);
+  } else {
+    innerWidth =
+        std::max(innerWidth, least.width() - marginLeft - marginRight);
+  }
 
   // Phase 4: place the lines.
   out.rows.reserve(shown.size());
   int y = marginTop;
   for (const Line &line : lines) {
     const Measured &head = shown[line.first];
-    const int x = marginLeft + head.indent;
-    const int width = innerWidth - head.indent;
+    const int x = marginLeft + head.indent + head.insetLeft;
+    const int width =
+        std::max(0, innerWidth - head.indent - head.insetLeft - head.insetRight);
+    // The space the legacy widget left above this line (ADR-1850); a line
+    // placed above the flow's bottom does not move the flow back.
+    const int flow = y;
+    y = std::max(0, y + static_cast<int>(
+                           specs[static_cast<std::size_t>(head.index)]
+                               .spaceBefore));
     if (line.count > 1U) {
       // What is left over is shared equally by the rows whose width the node
       // did not fix, as a box layout shares it; when every row is fixed the
@@ -277,20 +313,30 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
       for (std::size_t k = 0; k < line.count; ++k) {
         const RowSpec &spec =
             specs[static_cast<std::size_t>(shown[line.first + k].index)];
-        flexible += (spec.fieldWidth == 0U) ? 1 : 0;
+        flexible +=
+            ((spec.fieldWidth == 0U) && (spec.cellWidth == 0U)) ? 1 : 0;
       }
-      const int extra =
-          std::max(0, width - naturalLineWidth(shown, line, joinGap));
-      const int share = (flexible > 0) ? (extra / flexible) : 0;
-      const int remainder = (flexible > 0) ? (extra % flexible) : 0;
+      // A face as wide as its widget (exactBodyWidth) takes the width back from
+      // the rows that are not fixed when the line is wider than it, down to a
+      // label and a field's least (ADR-1850).
+      int extra = width - naturalLineWidth(shown, line, joinGap);
+      if (!face.exactBodyWidth()) {
+        extra = std::max(0, extra);
+      }
+      const int sign = (extra < 0) ? -1 : 1;
+      const int more = std::abs(extra);
+      const int share = (flexible > 0) ? ((more / flexible) * sign) : 0;
+      const int remainder = (flexible > 0) ? (more % flexible) : 0;
+      constexpr int kLeastControl = 40;
       int at = x;
       int given = 0;
       for (std::size_t k = 0; k < line.count; ++k) {
         const Measured &m = shown[line.first + k];
         const RowSpec &spec = specs[static_cast<std::size_t>(m.index)];
-        int cell = m.labelWidth + m.controlWidth;
-        if (spec.fieldWidth == 0U) {
-          cell += share + ((given < remainder) ? 1 : 0);
+        int cell = m.cell;
+        if ((spec.fieldWidth == 0U) && (spec.cellWidth == 0U)) {
+          cell += share + ((given < remainder) ? sign : 0);
+          cell = std::max(cell, m.labelWidth + kLeastControl);
           ++given;
         }
         const int top = y + ((line.height - m.height) / 2);
@@ -300,13 +346,13 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
         if (m.labelWidth > 0) {
           geo.label = QRect(at, top, m.labelWidth, m.height);
         }
-        geo.control =
-            QRect(at + m.labelWidth, top, cell - m.labelWidth, m.height);
+        geo.control = QRect(at + m.labelWidth, top,
+                            std::max(0, cell - m.labelWidth), m.height);
         m.ops->place(text, metrics, spec, geo);
         out.rows.push_back(geo);
         at += cell + joinGap;
       }
-      y += line.height + spacing;
+      y = std::max(flow, y + line.height + spacing);
       continue;
     }
     const RowSpec &spec = specs[static_cast<std::size_t>(head.index)];
@@ -335,7 +381,7 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     }
     head.ops->place(text, metrics, spec, geo);
     out.rows.push_back(geo);
-    y += head.height + spacing;
+    y = std::max(flow, y + head.height + spacing);
   }
   y -= spacing;
   int bodyHeight = y + marginBottom;

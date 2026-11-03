@@ -6,6 +6,7 @@
 #pragma once
 
 #include "Export.hpp"
+#include "NodeDetail.hpp"
 
 #include <cstdint>
 
@@ -29,6 +30,10 @@ struct CanvasConfig {
   bool painted = false;
   /// Which nodes and wires get an item.
   ItemPolicy itemPolicy = ItemPolicy::All;
+  /// CICADA (ADR-1882): the view scale under which a node paints its reduced
+  /// face and a wire a line (NodeDetail.hpp). 0 never reduces. Read at every
+  /// paint, so the application may change it at run time (CICADA_LOD).
+  double reducedDetailBelow = kReducedDetailBelow;
 };
 
 /// \brief The settings in force.

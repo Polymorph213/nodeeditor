@@ -278,8 +278,59 @@ void DefaultConnectionPainter::paint(QPainter *painter, ConnectionGraphicsObject
     painter->setPen(connectionStyle.constructionColor());
     painter->setBrush(connectionStyle.constructionColor());
     double const pointRadius = pointDiameter / 2.0;
-    painter->drawEllipse(cgo.out(), pointRadius, pointRadius);
-    painter->drawEllipse(cgo.in(), pointRadius, pointRadius);
+
+    // CICADA (ADR-1883): an end dot outside the clip (the item's exposed
+    // rectangle, set by ConnectionGraphicsObject::paint) draws nothing but is
+    // an antialiased ellipse all the same, and a long wire has both of its
+    // ends far from the view: at a view scale of 1 in a document of ten
+    // thousand nodes the dots were a fifth of the frame. An empty clip means
+    // no clip is known: both are drawn.
+    QRectF const clip = painter->clipBoundingRect();
+    auto const dotShows = [&clip, pointRadius](QPointF const &centre) {
+        double const reach = pointRadius + 1.0; // the pen is one unit wide
+        return clip.isEmpty()
+               || clip.intersects(QRectF(centre.x() - reach, centre.y() - reach, 2.0 * reach,
+                                         2.0 * reach));
+    };
+    if (dotShows(cgo.out()))
+        painter->drawEllipse(cgo.out(), pointRadius, pointRadius);
+    if (dotShows(cgo.in()))
+        painter->drawEllipse(cgo.in(), pointRadius, pointRadius);
+}
+
+void DefaultConnectionPainter::paintReduced(QPainter *painter,
+                                            ConnectionGraphicsObject const &cgo,
+                                            qreal lod) const
+{
+    Q_UNUSED(lod);
+    // CICADA (ADR-1882): a wire being dragged keeps its full look, the user is
+    // working on it; every other wire is a straight one-pixel line from end to
+    // end. The curve (a cubic path, stroked and antialiased), the type colour
+    // (two port-data lookups) and the end dots are what a frame at full
+    // zoom-out paid for fifteen thousand times.
+    ConnectionState const &state = cgo.connectionState();
+    if (state.requiresPort() || state.frozen()) {
+        paint(painter, cgo);
+        return;
+    }
+
+    auto const &connectionStyle = QtNodes::StyleCollection::connectionStyle();
+    bool const selected = cgo.isSelected();
+
+    bool const antialiased = painter->testRenderHint(QPainter::Antialiasing);
+    if (antialiased)
+        painter->setRenderHint(QPainter::Antialiasing, false);
+
+    // Width 0 is one device pixel; the selected wire's halo is two (cosmetic:
+    // the width is in device pixels, not in scene units).
+    QPen pen(selected ? connectionStyle.selectedHaloColor() : connectionStyle.normalColor(),
+             selected ? 2.0 : 0.0);
+    pen.setCosmetic(true);
+    painter->setPen(pen);
+    painter->drawLine(cgo.out(), cgo.in());
+
+    if (antialiased)
+        painter->setRenderHint(QPainter::Antialiasing, true);
 }
 
 QPainterPath DefaultConnectionPainter::getPainterStroke(

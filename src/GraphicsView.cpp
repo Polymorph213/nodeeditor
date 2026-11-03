@@ -602,15 +602,28 @@ void GraphicsView::drawBackground(QPainter *painter, const QRectF &r)
 
     auto const &flowViewStyle = StyleCollection::flowViewStyle();
 
-    QPen pfine(flowViewStyle.FineGridColor, 1.0);
+    // CICADA (ADR-1882): a grid whose lines are closer than a few pixels is a
+    // grey wash that costs one line per cell: at the scales the zoom-out limit
+    // used to forbid (ADR-1871) a window spans millions of scene units, and the
+    // fine grid alone was hundreds of thousands of lines on every zoom step.
+    // At scale 0.3 and above, where the view used to stop, both grids are drawn
+    // as before (15 x 0.3 = 4.5 px).
+    constexpr double kMinGridPixels = 4.0;
+    double const scale = transform().m11();
 
-    painter->setPen(pfine);
-    drawGrid(15);
+    if (15.0 * scale >= kMinGridPixels) {
+        QPen pfine(flowViewStyle.FineGridColor, 1.0);
 
-    QPen p(flowViewStyle.CoarseGridColor, 1.0);
+        painter->setPen(pfine);
+        drawGrid(15);
+    }
 
-    painter->setPen(p);
-    drawGrid(150);
+    if (150.0 * scale >= kMinGridPixels) {
+        QPen p(flowViewStyle.CoarseGridColor, 1.0);
+
+        painter->setPen(p);
+        drawGrid(150);
+    }
 }
 
 void GraphicsView::showEvent(QShowEvent *event)

@@ -4,6 +4,7 @@
 #include "AbstractGraphModel.hpp"
 #include "AbstractNodeGeometry.hpp"
 #include "BasicGraphicsScene.hpp"
+#include "CanvasConfig.hpp"
 #include "ConnectionIdUtils.hpp"
 #include "ConnectionState.hpp"
 #include "ConnectionStyle.hpp"
@@ -220,6 +221,19 @@ void ConnectionGraphicsObject::paint(QPainter *painter,
 {
     if (!scene())
         return;
+
+    // CICADA (ADR-1882): a straight line below a view scale (NodeDetail.hpp).
+    qreal const lod = QStyleOptionGraphicsItem::levelOfDetailFromTransform(painter->worldTransform());
+    NodeDetail detail = wireDetailForScale(lod, canvasConfig().reducedDetailBelow);
+    if (detail == NodeDetail::Hidden && isSelected())
+        detail = NodeDetail::Reduced; // a selected wire is always findable
+    if (detail != NodeDetail::Full) {
+        _lastPaintedDetail = detail;
+        if (detail == NodeDetail::Reduced)
+            nodeScene()->connectionPainter().paintReduced(painter, *this, lod);
+        return;
+    }
+    _lastPaintedDetail = NodeDetail::Full;
 
     painter->setClipRect(option->exposedRect);
 

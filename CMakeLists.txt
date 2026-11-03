@@ -154,8 +154,10 @@ set(HPP_HEADER_FILES
   include/QtNodes/internal/CanvasConfig.hpp
   include/QtNodes/internal/FaceLayout.hpp
   include/QtNodes/internal/NodeFace.hpp
+  include/QtNodes/internal/TableFace.hpp
   include/QtNodes/internal/NodeFaceEditorHost.hpp
   include/QtNodes/internal/NodeFacePainter.hpp
+  include/QtNodes/internal/NodeDetail.hpp
 )
 
 # If we want to give the option to build a static library,

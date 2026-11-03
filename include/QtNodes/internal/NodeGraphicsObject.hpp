@@ -12,6 +12,7 @@
 
 #include "Export.hpp"
 #include "FaceLayout.hpp"
+#include "NodeDetail.hpp"
 #include "NodeState.hpp"
 
 #include <QColor>
@@ -129,6 +130,16 @@ public:
     /// Getter for the NodeGroup object.
     std::weak_ptr<NodeGroup> nodeGroup() const { return _nodeGroup; }
 
+    /// CICADA (ADR-1882): the detail the last paint() drew (NodeDetail.hpp).
+    /// The item itself does not change with it: its shape and bounding
+    /// rectangle are the same at every scale.
+    NodeDetail lastPaintedDetail() const { return _lastPaintedDetail; }
+
+    /// CICADA (ADR-1882): how many times paint() has run. A node outside the
+    /// view is not painted (QGraphicsView culls by bounding rectangle); a test
+    /// reads this to check it.
+    std::uint64_t paintCount() const { return _paintCount; }
+
     /// CICADA: returns true if the most recent right-click landed on a
     /// validation icon (top-right of a node) and was handled by this
     /// class (copied message to clipboard). Host applications should
@@ -197,5 +208,9 @@ private:
     int _editComponent = -1;
 
     std::weak_ptr<NodeGroup> _nodeGroup{};
+
+    // CICADA (ADR-1882): what the last paint drew, and how many paints ran.
+    NodeDetail _lastPaintedDetail = NodeDetail::Full;
+    std::uint64_t _paintCount = 0;
 };
 } // namespace QtNodes

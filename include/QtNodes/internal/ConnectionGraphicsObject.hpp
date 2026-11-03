@@ -7,6 +7,7 @@
 
 #include "ConnectionState.hpp"
 #include "Definitions.hpp"
+#include "NodeDetail.hpp"
 
 class QGraphicsSceneMouseEvent;
 
@@ -58,6 +59,9 @@ public:
 
     ConnectionState &connectionState();
 
+    /// CICADA (ADR-1882): the detail the last paint() drew (NodeDetail.hpp).
+    NodeDetail lastPaintedDetail() const { return _lastPaintedDetail; }
+
 protected:
     /// CICADA (ADR-1638): the scene's selection set follows this item.
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
@@ -102,6 +106,9 @@ private:
     // setEndPoint() (the only inputs to the calculation).
     mutable std::pair<QPointF, QPointF> _cachedC1C2{};
     mutable bool _c1c2Valid{false};
+
+    // CICADA (ADR-1882): what the last paint drew.
+    NodeDetail _lastPaintedDetail{NodeDetail::Full};
 };
 
 } // namespace QtNodes

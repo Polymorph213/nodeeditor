@@ -15,7 +15,7 @@ inline void initResources()
     Q_INIT_RESOURCE(resources);
 }
 
-NodeStyle::NodeStyle()
+NodeStyle::NodeStyle(BuildDefault)
 {
     // Explicit resources inialization for preventing the static initialization
     // order fiasco: https://isocpp.org/wiki/faq/ctors#static-init-order
@@ -32,6 +32,21 @@ NodeStyle::NodeStyle()
     // This configuration is stored inside the compiled unit and is loaded statically
     loadJsonFile(":DefaultStyle.json");
 }
+
+NodeStyle const &NodeStyle::defaultPrototype()
+{
+    // CICADA (ADR-1881): the six icons and the parsed JSON are made once per
+    // process (the first call, on the GUI thread in the application); every
+    // NodeStyle() after it is a copy, and the copies share the icon engines.
+    // The constructor used to make them again on every call: 0.6 ms or more,
+    // and the node painter made one per draw function per node paint.
+    static NodeStyle const prototype{BuildDefault{}};
+    return prototype;
+}
+
+NodeStyle::NodeStyle()
+    : NodeStyle(defaultPrototype())
+{}
 
 NodeStyle::NodeStyle(QString jsonText)
 {

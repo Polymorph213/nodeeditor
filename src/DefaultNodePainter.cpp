@@ -7,6 +7,7 @@
 #include "ConnectionIdUtils.hpp"
 #include "DataFlowGraphModel.hpp"
 #include "NodeDelegateModel.hpp"
+#include "NodeDetail.hpp"
 #include "NodeGraphicsObject.hpp"
 #include "NodeState.hpp"
 #include "StyleCollection.hpp"
@@ -17,6 +18,7 @@
 #include <QtCore/QPair>
 
 #include <cmath>
+#include <optional>
 
 // CICADA semantic port-color palette. Replaces QtNodes' hash-seeded
 // dot color with the same palette used for wires, so a port dot and
@@ -31,16 +33,23 @@ namespace {
 /// to be written to JSON, parsed back and rebuilt at every draw of every part
 /// of the node (seven times a paint); the delegate holds the same object the
 /// JSON was made from.
+/// CICADA (ADR-1881): the caller used to declare a `NodeStyle` for the other
+/// case in every draw function, and its constructor (six SVG icons, a JSON
+/// parse) ran eight times a node paint although the delegate's style was
+/// returned. The storage is an optional now: it is made only for a model that
+/// is not a DataFlowGraphModel, and the delegate's own style, which holds a
+/// node's overrides, is never copied.
 /// \param storage Filled only when the model is not a DataFlowGraphModel.
-NodeStyle const &nodeStyleFor(AbstractGraphModel &model, NodeId nodeId, NodeStyle &storage)
+NodeStyle const &nodeStyleFor(AbstractGraphModel &model, NodeId nodeId,
+                              std::optional<NodeStyle> &storage)
 {
     if (auto *flow = dynamic_cast<DataFlowGraphModel *>(&model)) {
         if (auto *delegate = flow->delegateModel<NodeDelegateModel>(nodeId))
             return delegate->nodeStyle();
     }
     QJsonDocument const json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    storage = NodeStyle(json.object());
-    return storage;
+    storage.emplace(json.object());
+    return *storage;
 }
 
 /// CICADA (ADR-1642): the picture of a node's icon file, decoded once for the
@@ -87,6 +96,74 @@ void DefaultNodePainter::paint(QPainter *painter, NodeGraphicsObject &ngo) const
     drawProgressValue(painter, ngo);
 }
 
+void DefaultNodePainter::paintReduced(QPainter *painter, NodeGraphicsObject &ngo, qreal lod) const
+{
+    // CICADA (ADR-1882): the frame and the colour. Everything the full paint
+    // reads per port, per caption and per icon is left out; what is read is
+    // the size, the style, the selection and the validation state.
+    AbstractGraphModel &model = ngo.graphModel();
+    NodeId const nodeId = ngo.nodeId();
+
+    QSize const size = ngo.nodeScene()->nodeGeometry().size(nodeId);
+
+    std::optional<NodeStyle> styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
+
+    bool const selected = ngo.isSelected();
+    QColor border = selected ? nodeStyle.SelectedBoundaryColor : nodeStyle.NormalBoundaryColor;
+    // A painted node's body is the colour its rows sit on (the state colour);
+    // a legacy node's is its gradient.
+    QColor const &fill = ngo.painted() ? ngo.faceBackground() : nodeStyle.GradientColor1;
+
+    // As in the full paint, the validation state tints the border only.
+    bool flagged = false;
+    QVariant const var = model.nodeData(nodeId, NodeRole::ValidationState);
+    if (var.canConvert<NodeValidationState>()) {
+        switch (var.value<NodeValidationState>()._state) {
+        case NodeValidationState::State::Error:
+            border = nodeStyle.ErrorColor;
+            flagged = true;
+            break;
+        case NodeValidationState::State::Warning:
+            border = nodeStyle.WarningColor;
+            flagged = true;
+            break;
+        default:
+            break;
+        }
+    }
+
+    // The full paint resets this after the port dots; it must not outlive the
+    // paint it was set for.
+    if (ngo.nodeState().connectionForReaction())
+        ngo.nodeState().resetConnectionForReaction();
+
+    QRectF const body(0.0, 0.0, size.width(), size.height());
+    bool const antialiased = painter->testRenderHint(QPainter::Antialiasing);
+    if (antialiased)
+        painter->setRenderHint(QPainter::Antialiasing, false);
+
+    if (size.width() * lod < kFramedNodeMinPixels) {
+        // A few pixels across: one colour. The border colour when the node is
+        // selected or flagged, so that it stays findable; else half way between
+        // the body and the border, because the body alone is nearly the canvas
+        // colour and the node would vanish.
+        QColor const flat = (selected || flagged)
+                                ? border
+                                : QColor((fill.red() + border.red()) / 2,
+                                         (fill.green() + border.green()) / 2,
+                                         (fill.blue() + border.blue()) / 2);
+        painter->fillRect(body, flat);
+    } else {
+        painter->setPen(QPen(border, 0.0)); // width 0: one device pixel
+        painter->setBrush(fill);
+        painter->drawRect(body);
+    }
+
+    if (antialiased)
+        painter->setRenderHint(QPainter::Antialiasing, true);
+}
+
 void DefaultNodePainter::drawNodeRect(QPainter *painter, NodeGraphicsObject &ngo) const
 {
     AbstractGraphModel &model = ngo.graphModel();
@@ -97,7 +174,7 @@ void DefaultNodePainter::drawNodeRect(QPainter *painter, NodeGraphicsObject &ngo
 
     QSize size = geometry.size(nodeId);
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     QVariant var = model.nodeData(nodeId, NodeRole::ValidationState);
@@ -159,7 +236,7 @@ void DefaultNodePainter::drawConnectionPoints(QPainter *painter, NodeGraphicsObj
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     auto const &connectionStyle = StyleCollection::connectionStyle();
@@ -243,7 +320,7 @@ void DefaultNodePainter::drawFilledConnectionPoints(QPainter *painter, NodeGraph
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     auto diameter = nodeStyle.ConnectionPointDiameter;
@@ -320,7 +397,7 @@ void DefaultNodePainter::drawNodeCaption(QPainter *painter, NodeGraphicsObject &
 
     QPointF position(centerX - bounding.width() / 2.0, capPos.y());
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(f);
@@ -359,7 +436,7 @@ void DefaultNodePainter::drawNodeLabel(QPainter *painter, NodeGraphicsObject &ng
 
     QPointF position(centerX - bounding.width() / 2.0, y);
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(f);
@@ -376,7 +453,7 @@ void DefaultNodePainter::drawEntryLabels(QPainter *painter, NodeGraphicsObject &
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     for (PortType portType : {PortType::Out, PortType::In}) {
@@ -423,18 +500,18 @@ void DefaultNodePainter::drawResizeRect(QPainter *painter, NodeGraphicsObject &n
     }
 }
 
-void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphicsObject &ngo) const
+QRect DefaultNodePainter::cornerIconRect(AbstractGraphModel &model,
+                                         NodeId const nodeId,
+                                         AbstractNodeGeometry &geometry,
+                                         QPixmap *pixmapOut)
 {
-    AbstractGraphModel &model = ngo.graphModel();
-    NodeId const nodeId = ngo.nodeId();
-
     auto *dfModel = dynamic_cast<DataFlowGraphModel *>(&model);
     if (!dfModel)
-        return;
+        return QRect();
 
     auto *delegate = dfModel->delegateModel<NodeDelegateModel>(nodeId);
     if (!delegate)
-        return;
+        return QRect();
 
     // CICADA change: show the node's own icon in the bottom-right corner
     // instead of the processing-status icon (spinning gears, error marks,
@@ -444,9 +521,9 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
     QString const iconPath = delegate->nodeIconPath();
     QPixmap pixmap = iconPath.isEmpty() ? delegate->nodeIcon() : sharedIconFile(iconPath);
     if (pixmap.isNull())
-        return;
-
-    AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
+        return QRect();
+    if (pixmapOut != nullptr)
+        *pixmapOut = pixmap;
 
     QSize size = geometry.size(nodeId);
 
@@ -471,7 +548,21 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
         x = size.width() - iconSize - margin;
     }
 
-    QRect r(x, size.height() - iconSize - margin, iconSize, iconSize);
+    return QRect(x, size.height() - iconSize - margin, iconSize, iconSize);
+}
+
+void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphicsObject &ngo) const
+{
+    AbstractGraphModel &model = ngo.graphModel();
+    NodeId const nodeId = ngo.nodeId();
+
+    AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
+
+    QPixmap pixmap;
+    QRect const r = cornerIconRect(model, nodeId, geometry, &pixmap);
+    if (r.isEmpty() || pixmap.isNull())
+        return;
+
     // CICADA (ADR-1642): scaled once per picture and size, not on every draw.
     static QHash<QPair<qint64, QPair<int, int>>, QPixmap> scaledCache;
     auto const key = qMakePair(pixmap.cacheKey(), qMakePair(r.width(), r.height()));
@@ -499,7 +590,7 @@ void DefaultNodePainter::drawValidationIcon(QPainter *painter, NodeGraphicsObjec
     if (state._state == NodeValidationState::State::Valid)
         return;
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     QSize size = geometry.size(nodeId);
@@ -538,6 +629,11 @@ void DefaultNodePainter::drawProgressValue(QPainter *painter, NodeGraphicsObject
 
     QString const nodeProgress = model.nodeData(nodeId, NodeRole::ProgressValue).toString();
 
+    // CICADA (ADR-1881): an empty progress draws nothing; the font copy, the
+    // metrics and the style lookup below were paid on every node paint.
+    if (nodeProgress.isEmpty())
+        return;
+
     QFont font = painter->font();
     font.setBold(true);
     font.setPointSize(7);
@@ -546,7 +642,7 @@ void DefaultNodePainter::drawProgressValue(QPainter *painter, NodeGraphicsObject
     QSize size = geometry.size(nodeId);
     QPointF position(rect.width() / 1.5, size.height() - 1.0 * rect.height());
 
-    NodeStyle styleStorage;
+    std::optional<NodeStyle> styleStorage;
     NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(font);

@@ -87,5 +87,16 @@ public:
     QIcon statusPartial;
 
     ProcessingIconStyle processingIconStyle{};
+
+private:
+    /// CICADA (ADR-1881): selects the constructor that builds the library
+    /// default (the icons and the JSON); NodeStyle() copies the one it made.
+    struct BuildDefault
+    {};
+
+    explicit NodeStyle(BuildDefault);
+
+    /// CICADA (ADR-1881): the library default, built on first use.
+    static NodeStyle const &defaultPrototype();
 };
 } // namespace QtNodes

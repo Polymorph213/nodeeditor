@@ -99,6 +99,10 @@ QStringList NodeFaceSource::choiceLabelsOf(int row) const {
 
 QSize NodeFaceSource::minBodySize() const { return QSize(); }
 
+bool NodeFaceSource::exactBodyWidth() const { return false; }
+
+std::vector<FaceFrame> NodeFaceSource::frames() const { return {}; }
+
 int NodeFaceSource::bodyMargin() const { return -1; }
 
 int NodeFaceSource::rowGap() const { return -1; }

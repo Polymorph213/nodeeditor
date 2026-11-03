@@ -9,6 +9,7 @@
 #include "Definitions.hpp"
 #include "Export.hpp"
 
+#include <QtCore/QRect>
 #include <QtCore/QSize>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -121,6 +122,34 @@ struct RowSpec {
   /// The height of the row in pixels; 0 for the kind's own (ADR-1806: a
   /// legacy button in a stack was 20 px high, the slider 19).
   std::uint8_t rowHeight = 0;
+  /// Pixels of space above the line this row starts, besides the face's
+  /// spacing (ADR-1850): where the legacy widget's group boxes and form rows
+  /// put the control. 0 for none; negative puts the line above the flow's
+  /// bottom, over the lines before it, which the flow does not move back for
+  /// (a legacy control that stood beside a form, or in another order than the
+  /// schema's). Ignored for a joined row.
+  std::int16_t spaceBefore = 0;
+  /// Pixels the row (a joined line: its first row) starts to the right of the
+  /// body's left margin, and (a joined line: its last row) ends to the left of
+  /// the right margin (ADR-1850): the legacy control's own x range.
+  std::uint16_t insetLeft = 0;
+  std::uint16_t insetRight = 0;
+  /// A joined row: the width of its cell (label and control) in pixels, as
+  /// the legacy control and the space up to the next one were (ADR-1849); 0
+  /// for the natural width, plus a share of what is left.
+  std::uint16_t cellWidth = 0;
+};
+
+/// \brief A frame or a heading a face paints behind its rows (ADR-1851): a
+///        legacy group box (a frame with its title on the edge) or a bold
+///        heading label. In body coordinates, where the legacy widget had it.
+struct FaceFrame {
+  /// The group box's or the label's rectangle.
+  QRect rect;
+  /// The title; may be empty for a box.
+  QString title;
+  /// A heading: bold text in the rectangle, no frame.
+  bool heading = false;
 };
 
 /// \brief Who is editing, so that a form on the same value skips its own
@@ -207,6 +236,13 @@ public:
   /// \return 0 x 0 for none (the default).
   virtual QSize minBodySize() const;
 
+  /// \brief Whether minBodySize().width() is the width of the body and not
+  ///        only its least (ADR-1832): the legacy widget kept the width it
+  ///        was given while its fields gave way, so a face of rows wider than
+  ///        that narrows its field column instead of growing the node.
+  /// \return false by default.
+  virtual bool exactBodyWidth() const;
+
   /// \brief The margin the legacy widget's layout set on its four sides
   ///        (ADR-1806).
   /// \return Pixels; -1 for the metrics' own margins (the default).
@@ -216,6 +252,11 @@ public:
   ///        between the rows of one line (ADR-1806).
   /// \return Pixels; -1 for the metrics' own spacing (the default).
   virtual int rowGap() const;
+
+  /// \brief The frames and headings painted behind the rows (ADR-1851): the
+  ///        legacy widget's group boxes, where the rows inside them sit.
+  /// \return None by default.
+  virtual std::vector<FaceFrame> frames() const;
 
   /// \brief The scale and suffix a number row shows.
   /// \param row Index into rows().

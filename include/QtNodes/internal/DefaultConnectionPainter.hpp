@@ -15,6 +15,11 @@ class DefaultConnectionPainter : public AbstractConnectionPainter
 {
 public:
     void paint(QPainter *painter, ConnectionGraphicsObject const &cgo) const override;
+
+    /// CICADA (ADR-1882): a straight one-pixel line from end to end in the
+    /// style's colour, its halo when selected; no end dots, no curve, no
+    /// type colour.
+    void paintReduced(QPainter *painter, ConnectionGraphicsObject const &cgo, qreal lod) const override;
     QPainterPath getPainterStroke(ConnectionGraphicsObject const &cgo) const override;
 private:
     QPainterPath cubicPath(ConnectionGraphicsObject const &connection) const;

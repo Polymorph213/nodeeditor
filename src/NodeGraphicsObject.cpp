@@ -339,6 +339,8 @@ void NodeGraphicsObject::reactToConnection(ConnectionGraphicsObject const *cgo)
 
 void NodeGraphicsObject::paint(QPainter *painter, QStyleOptionGraphicsItem const *option, QWidget *)
 {
+    ++_paintCount;
+
     QString tooltip;
     QVariant var = _graphModel.nodeData(_nodeId, NodeRole::ValidationState);
     if (var.canConvert<NodeValidationState>()) {
@@ -351,6 +353,18 @@ void NodeGraphicsObject::paint(QPainter *painter, QStyleOptionGraphicsItem const
     // (a set is a string compare and a tooltip refresh).
     if (tooltip != toolTip())
         setToolTip(tooltip);
+
+    // CICADA (ADR-1882): below a view scale the captions, rows, icons and port
+    // labels are unreadable and cost most of a frame: the node paints its
+    // frame and colour (NodeDetail.hpp). Its shape and bounding rectangle are
+    // the same, so a click, a selection and a drag work as at any scale.
+    qreal const lod = QStyleOptionGraphicsItem::levelOfDetailFromTransform(painter->worldTransform());
+    if (detailForScale(lod, canvasConfig().reducedDetailBelow) == NodeDetail::Reduced) {
+        _lastPaintedDetail = NodeDetail::Reduced;
+        nodeScene()->nodePainter().paintReduced(painter, *this, lod);
+        return;
+    }
+    _lastPaintedDetail = NodeDetail::Full;
 
     painter->setClipRect(option->exposedRect);
 

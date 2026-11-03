@@ -70,7 +70,9 @@ void DefaultHorizontalNodeGeometry::recomputeSize(NodeId const nodeId) const
         // The legacy proxy set the widget's least height to the node's own
         // less its caption, so the node ended taller than the greater of its
         // ports and its widget by that much (FaceMetrics::portBodyExtra).
-        if (faceOf(_graphModel, nodeId).alignsToPorts()) {
+        // A face with no row has no body to stretch: the node is its ports
+        // (ADR-1849).
+        if (faceOf(_graphModel, nodeId).alignsToPorts() && (faceSize.height() > 0)) {
             height += static_cast<unsigned int>(faceMetrics().portBodyExtra);
         }
     } else if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
