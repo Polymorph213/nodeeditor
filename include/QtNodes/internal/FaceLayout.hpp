@@ -55,6 +55,9 @@ struct NODE_EDITOR_PUBLIC FaceMetrics {
   int rowSpacing = 3;
   /// Space between the label cell and the field cell.
   int columnSpacing = 3;
+  /// Space between the rows of one line (kRowJoined) of a face that does not
+  /// state its own (NodeFaceSource::rowGap; ADR-1806).
+  int joinSpacing = 4;
   /// Indent of the rows of a section.
   int sectionIndent = 12;
   /// Horizontal padding inside a label cell and a field cell.
@@ -135,7 +138,49 @@ struct FaceHit {
   int row = -1;
   /// The part of it.
   FacePart part = FacePart::None;
+  /// The point hit, in body coordinates (a Table row finds its cell by it).
+  QPoint point;
 };
+
+/// \brief Where the parts of a Table row's table are (ADR-1804).
+struct TableGeometry {
+  int columns = 0;
+  int headerHeight = 0;
+  int lineHeight = 0;
+  /// How many lines fit below the header.
+  int visibleLines = 0;
+  /// columns + 1 entries: the left edge of each column, then the right edge
+  /// of the last, relative to the control's left.
+  std::vector<int> columnX;
+};
+
+/// \brief The geometry of the table of a Table row.
+/// \param face The face.
+/// \param row Index into the face's rows.
+/// \param control The row's control rectangle (body coordinates).
+/// \param metrics The face metrics.
+/// \return The geometry; columns 0 when the row has no table of its own.
+NODE_EDITOR_PUBLIC TableGeometry tableGeometry(const NodeFaceSource &face,
+                                               int row, const QRect &control,
+                                               const FaceMetrics &metrics);
+
+/// \brief The cell at a point of a Table row.
+/// \param point In body coordinates.
+/// \param line Set to the line (0 up below the header), -1 for the header.
+/// \param column Set to the column.
+/// \return true when the point is on a cell of the table.
+NODE_EDITOR_PUBLIC bool tableCellAt(const NodeFaceSource &face, int row,
+                                    const QRect &control, const QPoint &point,
+                                    const FaceMetrics &metrics, int *line,
+                                    int *column);
+
+/// \brief The rectangle of a cell (body coordinates).
+/// \param line The line shown, 0 up below the header (the first line shown),
+///        -1 for the header.
+/// \param column The column.
+NODE_EDITOR_PUBLIC QRect tableCellRect(const TableGeometry &geometry,
+                                       const QRect &control, int line,
+                                       int column);
 
 /// \brief Where one row is, in body coordinates (the body's own origin).
 struct RowGeometry {

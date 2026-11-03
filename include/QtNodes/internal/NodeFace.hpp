@@ -74,6 +74,15 @@ enum RowFlag : std::uint8_t {
   /// the legacy inline editors did (a light field of a fixed width, no label
   /// cell, no arrows on a real number), and keeps its own width.
   kRowInline = 16U,
+  /// A Table row of the face's own size (the Panel, ADR-1804): the control is
+  /// RowSpec::min by RowSpec::max pixels, and the table in it is the face's
+  /// (tableColumns() and the functions after it).
+  kRowSized = 32U,
+  /// The row sits on the line of the row before it, to its right (ADR-1806):
+  /// the legacy action widgets put a button, a status and a field on one
+  /// line. The line is as high as its highest row and as wide as the face;
+  /// the rows share the width left over equally, as a box layout did.
+  kRowJoined = 64U,
 };
 
 /// \brief What one row is. Shared per node type, never per node.
@@ -106,7 +115,12 @@ struct RowSpec {
   /// A combination of RowFlag bits.
   std::uint8_t flags = 0;
   /// An inline row: the width of the field in pixels; 0 for the kind's own.
+  /// A Button, a Bool, a String and a Slider row also take it (ADR-1806),
+  /// as the width of the control a legacy widget fixed.
   std::uint16_t fieldWidth = 0;
+  /// The height of the row in pixels; 0 for the kind's own (ADR-1806: a
+  /// legacy button in a stack was 20 px high, the slider 19).
+  std::uint8_t rowHeight = 0;
 };
 
 /// \brief Who is editing, so that a form on the same value skips its own
@@ -193,6 +207,16 @@ public:
   /// \return 0 x 0 for none (the default).
   virtual QSize minBodySize() const;
 
+  /// \brief The margin the legacy widget's layout set on its four sides
+  ///        (ADR-1806).
+  /// \return Pixels; -1 for the metrics' own margins (the default).
+  virtual int bodyMargin() const;
+
+  /// \brief The space the legacy widget's layout left between its rows, and
+  ///        between the rows of one line (ADR-1806).
+  /// \return Pixels; -1 for the metrics' own spacing (the default).
+  virtual int rowGap() const;
+
   /// \brief The scale and suffix a number row shows.
   /// \param row Index into rows().
   /// \return The display unit; the base shows stored values with the row's
@@ -211,6 +235,43 @@ public:
   ///         between ..."); empty when the row's last write was accepted.
   ///         Shown as a tooltip at the row (ADR-1253).
   virtual QString refusalOf(int row) const;
+
+  /// \name The content of a Table row (the Panel, ADR-1804).
+  /// @{
+  /// \brief How many columns the table of a Table row has.
+  /// \param row Index into rows().
+  /// \return 0 for a row with no table of its own: it paints displayText().
+  virtual int tableColumns(int row) const;
+  /// \brief How many lines the table has below its header.
+  /// \param row Index into rows().
+  virtual int tableLines(int row) const;
+  /// \brief The first line shown (the table is scrolled by display state).
+  /// \param row Index into rows().
+  virtual int tableFirstLine(int row) const;
+  /// \brief The header text of a column.
+  virtual QString tableHeader(int row, int column) const;
+  /// \brief The text of a cell.
+  /// \param line 0 up, below the header.
+  virtual QString tableCell(int row, int line, int column) const;
+  /// \brief The width of a column in pixels; 0 shares what is left.
+  virtual int tableColumnWidth(int row, int column) const;
+  /// \brief Whether a cell may be edited now.
+  virtual bool tableCellEditable(int row, int line, int column) const;
+  /// \brief Write a cell, the way a person's edit does.
+  /// \return false when the text was refused (nothing changed).
+  virtual bool setTableCell(int row, int line, int column, const QString &text,
+                            EditSource source);
+  /// \brief Scroll the table by \p lines (negative up).
+  /// \return true when the first line moved.
+  virtual bool scrollTable(int row, int lines);
+  /// @}
+
+  /// \brief The person dragged the node's resize handle: a node whose body
+  ///        has a size of its own takes it.
+  /// \param size The body size asked for, margins included.
+  /// \param final true at the release of the drag.
+  /// \return true when the face took the size (it then changes its rows).
+  virtual bool resizeBody(const QSize &size, bool final);
 
   /// \brief Whether the body sits against the first port line instead of
   ///        being centred between the caption and the bottom. True for the

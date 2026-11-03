@@ -99,6 +99,10 @@ QStringList NodeFaceSource::choiceLabelsOf(int row) const {
 
 QSize NodeFaceSource::minBodySize() const { return QSize(); }
 
+int NodeFaceSource::bodyMargin() const { return -1; }
+
+int NodeFaceSource::rowGap() const { return -1; }
+
 RowDisplay NodeFaceSource::display(int row) const {
   RowDisplay shown;
   const std::shared_ptr<const std::vector<RowSpec>> all = rows();
@@ -158,6 +162,69 @@ QString NodeFaceSource::displayText(int row, int component) const {
 QString NodeFaceSource::refusalOf(int row) const {
   static_cast<void>(row);
   return QString();
+}
+
+int NodeFaceSource::tableColumns(int row) const {
+  static_cast<void>(row);
+  return 0;
+}
+
+int NodeFaceSource::tableLines(int row) const {
+  static_cast<void>(row);
+  return 0;
+}
+
+int NodeFaceSource::tableFirstLine(int row) const {
+  static_cast<void>(row);
+  return 0;
+}
+
+QString NodeFaceSource::tableHeader(int row, int column) const {
+  static_cast<void>(row);
+  static_cast<void>(column);
+  return QString();
+}
+
+QString NodeFaceSource::tableCell(int row, int line, int column) const {
+  static_cast<void>(row);
+  static_cast<void>(line);
+  static_cast<void>(column);
+  return QString();
+}
+
+int NodeFaceSource::tableColumnWidth(int row, int column) const {
+  static_cast<void>(row);
+  static_cast<void>(column);
+  return 0;
+}
+
+bool NodeFaceSource::tableCellEditable(int row, int line, int column) const {
+  static_cast<void>(row);
+  static_cast<void>(line);
+  static_cast<void>(column);
+  return false;
+}
+
+bool NodeFaceSource::setTableCell(int row, int line, int column,
+                                  const QString &text, EditSource source) {
+  static_cast<void>(row);
+  static_cast<void>(line);
+  static_cast<void>(column);
+  static_cast<void>(text);
+  static_cast<void>(source);
+  return false;
+}
+
+bool NodeFaceSource::scrollTable(int row, int lines) {
+  static_cast<void>(row);
+  static_cast<void>(lines);
+  return false;
+}
+
+bool NodeFaceSource::resizeBody(const QSize &size, bool final) {
+  static_cast<void>(size);
+  static_cast<void>(final);
+  return false;
 }
 
 bool NodeFaceSource::alignsToPorts() const { return false; }

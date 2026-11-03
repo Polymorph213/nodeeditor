@@ -25,7 +25,9 @@ int labelWidth(const TextMetrics &text, const FaceMetrics &metrics,
 int controlWidth(const TextMetrics &text, const FaceMetrics &metrics,
                  const RowSpec &spec) {
   static_cast<void>(text);
-  static_cast<void>(spec);
+  if (spec.fieldWidth != 0U) {
+    return static_cast<int>(spec.fieldWidth); // the groove the node measured
+  }
   return std::max(metrics.minFieldWidth, kSliderWidth);
 }
 

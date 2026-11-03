@@ -31,6 +31,9 @@ int controlWidth(const TextMetrics &text, const FaceMetrics &metrics,
            (spec.label.isEmpty() ? 0
                                  : kInlineGap + text.advance(spec.label));
   }
+  if (spec.fieldWidth != 0U) {
+    return static_cast<int>(spec.fieldWidth); // the width the node measured
+  }
   // The legacy check box cell: the box, a small gap and the text (calibrated
   // against RotaryTableCalibration).
   constexpr int kGap = 2;

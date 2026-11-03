@@ -85,13 +85,45 @@ struct Measured {
   int indent = 0;
   bool twoColumn = false;
   bool natural = false;
+  /// The row asked to sit on the line of the row before it (kRowJoined).
+  bool joined = false;
   std::size_t section = 0;
+};
+
+/// The rows that share one line: `count` of them from `first`, in `shown`.
+struct Line {
+  std::size_t first = 0;
+  std::size_t count = 1;
+  /// The height of the highest row.
+  int height = 0;
 };
 
 /// A row that keeps its own width and is not stretched to the body's.
 bool keepsNaturalWidth(const RowSpec &spec) {
   return (spec.kind == RowKind::Vec3) || (spec.kind == RowKind::PortAlign) ||
          ((spec.flags & kRowInline) != 0U);
+}
+
+/// The width of a line's rows side by side, before the share of what is left.
+int naturalLineWidth(const std::vector<Measured> &shown, const Line &line,
+                     int gap) {
+  int width = gap * static_cast<int>(line.count - 1U);
+  for (std::size_t k = 0; k < line.count; ++k) {
+    const Measured &m = shown[line.first + k];
+    width += m.labelWidth + m.controlWidth;
+  }
+  return width;
+}
+
+/// The height of a row: a port step on a port-aligned face, else the row's
+/// own, else the kind's.
+int rowHeightOf(const RowSpec &spec, const RowOps &ops,
+                const FaceMetrics &metrics, bool compact) {
+  if (compact) {
+    return metrics.portRowHeight;
+  }
+  return (spec.rowHeight != 0U) ? static_cast<int>(spec.rowHeight)
+                                : ops.height(metrics, spec);
 }
 
 } // namespace
@@ -113,23 +145,10 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
   // The rows of a port-aligned face (the Point, the Circle family) fill the
   // body with no margin and no gap: each sits on a port line.
   const bool compact = face.alignsToPorts();
-  const int marginLeft = compact ? 0 : metrics.marginLeft;
-  const int marginTop = compact ? 0 : metrics.marginTop;
-  const int marginRight = compact ? 0 : metrics.marginRight;
-  const int marginBottom = compact ? 0 : metrics.marginBottom;
-  const int spacing = compact ? 0 : metrics.rowSpacing;
 
+  // Phase 1: measure every row that is shown.
   std::vector<Measured> shown;
   shown.reserve(specs.size());
-  // A section's body is a form of its own (ADR-1306): its labels and its
-  // fields line up among themselves, the rows outside a section among theirs.
-  struct Columns {
-    int label = 0;
-    int field = 0;
-    int indent = 0;
-  };
-  std::vector<Columns> columns(1);
-  int spanWidth = 0;
   for (std::size_t i = 0; i < specs.size(); ++i) {
     const RowSpec &spec = specs[i];
     const int index = static_cast<int>(i);
@@ -144,30 +163,90 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     Measured m;
     m.index = index;
     m.ops = &rowOps(spec.kind);
-    // A port-aligned face keeps each row on its port line: a port step high.
-    m.height = compact ? metrics.portRowHeight : m.ops->height(metrics, spec);
+    m.height = rowHeightOf(spec, *m.ops, metrics, compact);
     m.labelWidth = m.ops->labelWidth(text, metrics, spec);
     m.controlWidth = m.ops->controlWidth(text, metrics, spec);
     m.indent = inSection ? metrics.sectionIndent : 0;
-    m.natural = keepsNaturalWidth(spec);
-    m.twoColumn =
-        m.ops->twoColumn && ((spec.flags & kRowWide) == 0U) && !m.natural;
     m.section = inSection ? static_cast<std::size_t>(spec.section) : 0U;
-    if (m.twoColumn) {
-      if (columns.size() <= m.section) {
-        columns.resize(m.section + 1U);
-      }
-      Columns &col = columns[m.section];
-      col.label = std::max(col.label, m.labelWidth);
-      col.field = std::max(col.field, m.controlWidth);
-      col.indent = std::max(col.indent, m.indent);
-    } else {
-      spanWidth = std::max(spanWidth, m.indent + m.labelWidth + m.controlWidth);
-    }
+    m.joined = !compact && ((spec.flags & kRowJoined) != 0U) &&
+               !shown.empty() && (shown.back().section == m.section);
     shown.push_back(m);
   }
   if (shown.empty()) {
     return out;
+  }
+
+  // Phase 2: the lines. A joined row belongs to the line before it.
+  std::vector<Line> lines;
+  lines.reserve(shown.size());
+  for (std::size_t i = 0; i < shown.size(); ++i) {
+    if (shown[i].joined) {
+      ++lines.back().count;
+    } else {
+      Line line;
+      line.first = i;
+      lines.push_back(line);
+    }
+  }
+  for (Line &line : lines) {
+    for (std::size_t k = 0; k < line.count; ++k) {
+      line.height = std::max(line.height, shown[line.first + k].height);
+    }
+  }
+  // A face may state the margin and the gap of the legacy widget's layout
+  // (ADR-1806); a line of several rows then uses the gap sideways too.
+  const int faceMargin = compact ? -1 : face.bodyMargin();
+  const int faceGap = compact ? -1 : face.rowGap();
+  const bool framed = faceMargin >= 0;
+  const int marginLeft =
+      compact ? 0 : (framed ? faceMargin : metrics.marginLeft);
+  const int marginTop =
+      compact ? 0 : (framed ? faceMargin : metrics.marginTop);
+  const int marginRight =
+      compact ? 0 : (framed ? faceMargin : metrics.marginRight);
+  const int marginBottom =
+      compact ? 0 : (framed ? faceMargin : metrics.marginBottom);
+  const int spacing =
+      compact ? 0 : ((faceGap >= 0) ? faceGap : metrics.rowSpacing);
+  const int joinGap = (faceGap >= 0) ? faceGap : metrics.joinSpacing;
+
+  // Phase 3: the width. A section's body is a form of its own (ADR-1306): its
+  // labels and its fields line up among themselves, the rows outside a
+  // section among theirs. A line of several rows is not a form row.
+  struct Columns {
+    int label = 0;
+    int field = 0;
+    int indent = 0;
+  };
+  std::vector<Columns> columns(1);
+  int spanWidth = 0;
+  for (const Line &line : lines) {
+    Measured &head = shown[line.first];
+    if (line.count > 1U) {
+      for (std::size_t k = 0; k < line.count; ++k) {
+        shown[line.first + k].natural = true;
+        shown[line.first + k].twoColumn = false;
+      }
+      spanWidth = std::max(
+          spanWidth, head.indent + naturalLineWidth(shown, line, joinGap));
+      continue;
+    }
+    const RowSpec &spec = specs[static_cast<std::size_t>(head.index)];
+    head.natural = keepsNaturalWidth(spec);
+    head.twoColumn = head.ops->twoColumn &&
+                     ((spec.flags & kRowWide) == 0U) && !head.natural;
+    if (head.twoColumn) {
+      if (columns.size() <= head.section) {
+        columns.resize(head.section + 1U);
+      }
+      Columns &col = columns[head.section];
+      col.label = std::max(col.label, head.labelWidth);
+      col.field = std::max(col.field, head.controlWidth);
+      col.indent = std::max(col.indent, head.indent);
+    } else {
+      spanWidth = std::max(spanWidth,
+                           head.indent + head.labelWidth + head.controlWidth);
+    }
   }
 
   int innerWidth = spanWidth;
@@ -178,32 +257,85 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
           col.indent + col.label + metrics.columnSpacing + col.field);
     }
   }
+  // The least width of the body is the width of the rows too: the rows of a
+  // line share what the legacy widget had beyond its hint (ADR-1806).
+  const QSize least = face.minBodySize();
+  innerWidth = std::max(innerWidth, least.width() - marginLeft - marginRight);
 
+  // Phase 4: place the lines.
   out.rows.reserve(shown.size());
   int y = marginTop;
-  for (const Measured &m : shown) {
-    const RowSpec &spec = specs[static_cast<std::size_t>(m.index)];
-    RowGeometry geo;
-    geo.index = m.index;
-    const int x = marginLeft + m.indent;
-    const int width = innerWidth - m.indent;
-    geo.row = QRect(x, y, width, m.height);
-    if (m.twoColumn) {
-      const int labelColumn = columns[m.section].label;
-      geo.label = QRect(x + labelColumn - m.labelWidth, y, m.labelWidth,
-                        m.height);
-      const int fieldX = x + labelColumn + metrics.columnSpacing;
-      geo.control = QRect(fieldX, y, std::max(0, x + width - fieldX),
-                          m.height);
-    } else if (m.natural) {
-      geo.row = QRect(x, y, m.labelWidth + m.controlWidth, m.height);
-      geo.control = QRect(x + m.labelWidth, y, m.controlWidth, m.height);
-    } else {
-      geo.control = QRect(x, y, width, m.height);
+  for (const Line &line : lines) {
+    const Measured &head = shown[line.first];
+    const int x = marginLeft + head.indent;
+    const int width = innerWidth - head.indent;
+    if (line.count > 1U) {
+      // What is left over is shared equally by the rows whose width the node
+      // did not fix, as a box layout shares it; when every row is fixed the
+      // line ends short of the face.
+      int flexible = 0;
+      for (std::size_t k = 0; k < line.count; ++k) {
+        const RowSpec &spec =
+            specs[static_cast<std::size_t>(shown[line.first + k].index)];
+        flexible += (spec.fieldWidth == 0U) ? 1 : 0;
+      }
+      const int extra =
+          std::max(0, width - naturalLineWidth(shown, line, joinGap));
+      const int share = (flexible > 0) ? (extra / flexible) : 0;
+      const int remainder = (flexible > 0) ? (extra % flexible) : 0;
+      int at = x;
+      int given = 0;
+      for (std::size_t k = 0; k < line.count; ++k) {
+        const Measured &m = shown[line.first + k];
+        const RowSpec &spec = specs[static_cast<std::size_t>(m.index)];
+        int cell = m.labelWidth + m.controlWidth;
+        if (spec.fieldWidth == 0U) {
+          cell += share + ((given < remainder) ? 1 : 0);
+          ++given;
+        }
+        const int top = y + ((line.height - m.height) / 2);
+        RowGeometry geo;
+        geo.index = m.index;
+        geo.row = QRect(at, y, cell, line.height);
+        if (m.labelWidth > 0) {
+          geo.label = QRect(at, top, m.labelWidth, m.height);
+        }
+        geo.control =
+            QRect(at + m.labelWidth, top, cell - m.labelWidth, m.height);
+        m.ops->place(text, metrics, spec, geo);
+        out.rows.push_back(geo);
+        at += cell + joinGap;
+      }
+      y += line.height + spacing;
+      continue;
     }
-    m.ops->place(text, metrics, spec, geo);
+    const RowSpec &spec = specs[static_cast<std::size_t>(head.index)];
+    RowGeometry geo;
+    geo.index = head.index;
+    geo.row = QRect(x, y, width, head.height);
+    if (head.twoColumn) {
+      const int labelColumn = columns[head.section].label;
+      geo.label = QRect(x + labelColumn - head.labelWidth, y, head.labelWidth,
+                        head.height);
+      int fieldX = x + labelColumn + metrics.columnSpacing;
+      int fieldWidth = std::max(0, x + width - fieldX);
+      // A field of a width the node fixed sits at the right of the line, as
+      // the legacy edit did, and does not stretch (ADR-1806).
+      if ((spec.fieldWidth != 0U) && (fieldWidth > head.controlWidth)) {
+        fieldX += fieldWidth - head.controlWidth;
+        fieldWidth = head.controlWidth;
+      }
+      geo.control = QRect(fieldX, y, fieldWidth, head.height);
+    } else if (head.natural) {
+      geo.row = QRect(x, y, head.labelWidth + head.controlWidth, head.height);
+      geo.control =
+          QRect(x + head.labelWidth, y, head.controlWidth, head.height);
+    } else {
+      geo.control = QRect(x, y, width, head.height);
+    }
+    head.ops->place(text, metrics, spec, geo);
     out.rows.push_back(geo);
-    y += m.height + spacing;
+    y += head.height + spacing;
   }
   y -= spacing;
   int bodyHeight = y + marginBottom;
@@ -213,7 +345,6 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     // greater of the ports and this body.
     bodyHeight = std::max(bodyHeight, metrics.portBodyMinHeight);
   }
-  const QSize least = face.minBodySize();
   out.size = QSize(std::max(marginLeft + innerWidth + marginRight,
                             least.width()),
                    std::max(bodyHeight, least.height()));
@@ -233,8 +364,103 @@ const FaceLayoutResult &cachedLayout(const NodeFaceSource &face,
   return *slot;
 }
 
+TableGeometry tableGeometry(const NodeFaceSource &face, int row,
+                            const QRect &control, const FaceMetrics &metrics) {
+  TableGeometry g;
+  g.columns = face.tableColumns(row);
+  if (g.columns <= 0) {
+    g.columns = 0;
+    return g;
+  }
+  g.headerHeight = metrics.labelHeight;
+  g.lineHeight = metrics.labelHeight;
+  g.visibleLines =
+      std::max(0, (control.height() - g.headerHeight) / g.lineHeight);
+  std::vector<int> width(static_cast<std::size_t>(g.columns), 0);
+  int fixedTotal = 0;
+  int shared = 0;
+  for (int c = 0; c < g.columns; ++c) {
+    const int w = std::max(0, face.tableColumnWidth(row, c));
+    width[static_cast<std::size_t>(c)] = w;
+    if (w > 0) {
+      fixedTotal += w;
+    } else {
+      ++shared;
+    }
+  }
+  const int share =
+      (shared > 0) ? std::max(1, (control.width() - fixedTotal) / shared) : 0;
+  g.columnX.assign(static_cast<std::size_t>(g.columns) + 1U, 0);
+  int x = 0;
+  for (int c = 0; c < g.columns; ++c) {
+    g.columnX[static_cast<std::size_t>(c)] = x;
+    const int w = width[static_cast<std::size_t>(c)];
+    x += (w > 0) ? w : share;
+  }
+  g.columnX[static_cast<std::size_t>(g.columns)] = x;
+  return g;
+}
+
+bool tableCellAt(const NodeFaceSource &face, int row, const QRect &control,
+                 const QPoint &point, const FaceMetrics &metrics, int *line,
+                 int *column) {
+  if (!control.contains(point)) {
+    return false;
+  }
+  const TableGeometry g = tableGeometry(face, row, control, metrics);
+  if (g.columns == 0) {
+    return false;
+  }
+  const QPoint local = point - control.topLeft();
+  int found = -1;
+  for (int c = 0; c < g.columns; ++c) {
+    if ((local.x() >= g.columnX[static_cast<std::size_t>(c)]) &&
+        (local.x() < g.columnX[static_cast<std::size_t>(c) + 1U])) {
+      found = c;
+      break;
+    }
+  }
+  if (found < 0) {
+    return false;
+  }
+  int at = -1;
+  if (local.y() >= g.headerHeight) {
+    at = face.tableFirstLine(row) +
+         ((local.y() - g.headerHeight) / g.lineHeight);
+    if (at >= face.tableLines(row)) {
+      return false;
+    }
+  }
+  if (line != nullptr) {
+    *line = at;
+  }
+  if (column != nullptr) {
+    *column = found;
+  }
+  return true;
+}
+
+QRect tableCellRect(const TableGeometry &geometry, const QRect &control,
+                    int line, int column) {
+  if ((column < 0) || (column >= geometry.columns)) {
+    return QRect();
+  }
+  const int left = control.left() +
+                   geometry.columnX[static_cast<std::size_t>(column)];
+  const int right = control.left() +
+                    geometry.columnX[static_cast<std::size_t>(column) + 1U];
+  const int top = (line < 0)
+                      ? control.top()
+                      : (control.top() + geometry.headerHeight +
+                         (line * geometry.lineHeight));
+  const int height = (line < 0) ? geometry.headerHeight : geometry.lineHeight;
+  return QRect(left, top, std::max(0, right - left), height)
+      .intersected(control);
+}
+
 FaceHit hitTest(const FaceLayoutResult &layout, const QPoint &point) {
   FaceHit hit;
+  hit.point = point;
   for (const RowGeometry &geo : layout.rows) {
     if (!geo.row.contains(point)) {
       continue;

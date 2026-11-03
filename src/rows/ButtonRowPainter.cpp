@@ -22,6 +22,9 @@ int labelWidth(const TextMetrics &text, const FaceMetrics &metrics,
 
 int controlWidth(const TextMetrics &text, const FaceMetrics &metrics,
                  const RowSpec &spec) {
+  if (spec.fieldWidth != 0U) {
+    return static_cast<int>(spec.fieldWidth); // a button of a fixed width
+  }
   constexpr int kPad = 8;
   return text.advance(spec.label) + (2 * metrics.cellPad) + kPad;
 }

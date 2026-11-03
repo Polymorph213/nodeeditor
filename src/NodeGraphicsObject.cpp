@@ -673,7 +673,21 @@ void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
         setSelected(true);
     }
 
-    if (_nodeState.resizing() && !_painted) {
+    if (_nodeState.resizing() && _painted) {
+        // CICADA (ADR-1804): a face with a body of its own takes the size
+        // the handle asks for (the Panel); the node then follows its rows.
+        NodeFaceSource &face = faceOf(_graphModel, _nodeId);
+        auto const diff = event->pos() - event->lastPos();
+        QSize const next = faceRect().size().toSize()
+                           + QSize(static_cast<int>(diff.x()), static_cast<int>(diff.y()));
+        if (face.resizeBody(next, false)) {
+            faceChanged();
+            event->accept();
+        } else {
+            // A face with no body of its own: the handle drags the node.
+            QGraphicsObject::mouseMoveEvent(event);
+        }
+    } else if (_nodeState.resizing() && !_painted) {
         auto diff = event->pos() - event->lastPos();
 
         if (auto w = _graphModel.nodeData<QWidget *>(_nodeId, NodeRole::Widget)) {
@@ -771,6 +785,10 @@ void NodeGraphicsObject::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
         return;
     }
 
+    if (_painted && _nodeState.resizing()) {
+        if (faceOf(_graphModel, _nodeId).resizeBody(faceRect().size().toSize(), true))
+            faceChanged();
+    }
     _nodeState.setResizing(false);
 
     QGraphicsObject::mouseReleaseEvent(event);
