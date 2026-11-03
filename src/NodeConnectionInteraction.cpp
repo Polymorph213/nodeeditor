@@ -96,10 +96,14 @@ bool NodeConnectionInteraction::disconnect(PortType portToDisconnect) const
 
      //Repaint connection points.
     NodeId connectedNodeId = getNodeId(oppositePort(portToDisconnect), connectionId);
-    _scene.nodeGraphicsObject(connectedNodeId)->update();
+    // CICADA (ADR-1638): the far end of a wire may have no item (the world
+    // plane feeds nearly every node and a scene need not draw it).
+    if (NodeGraphicsObject *connected = _scene.nodeGraphicsObject(connectedNodeId))
+        connected->update();
 
     NodeId disconnectedNodeId = getNodeId(portToDisconnect, connectionId);
-    _scene.nodeGraphicsObject(disconnectedNodeId)->update();
+    if (NodeGraphicsObject *disconnected = _scene.nodeGraphicsObject(disconnectedNodeId))
+        disconnected->update();
 
     return true;
 }

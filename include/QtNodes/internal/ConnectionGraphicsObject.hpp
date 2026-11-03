@@ -59,6 +59,9 @@ public:
     ConnectionState &connectionState();
 
 protected:
+    /// CICADA (ADR-1638): the scene's selection set follows this item.
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
+
     void paint(QPainter *painter,
                QStyleOptionGraphicsItem const *option,
                QWidget *widget = 0) override;

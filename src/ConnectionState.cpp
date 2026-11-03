@@ -57,8 +57,9 @@ NodeId ConnectionState::lastHoveredNode() const
 void ConnectionState::resetLastHoveredNode()
 {
     if (_lastHoveredNode != InvalidNodeId) {
-        auto ngo = _cgo.nodeScene()->nodeGraphicsObject(_lastHoveredNode);
-        ngo->update();
+        // CICADA (ADR-1638): the hovered node may have lost its item.
+        if (auto ngo = _cgo.nodeScene()->nodeGraphicsObject(_lastHoveredNode))
+            ngo->update();
     }
 
     _lastHoveredNode = InvalidNodeId;

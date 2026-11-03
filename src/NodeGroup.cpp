@@ -1,9 +1,12 @@
 #include "NodeGroup.hpp"
+#include "BasicGraphicsScene.hpp"
 #include "ConnectionIdUtils.hpp"
 #include "NodeConnectionInteraction.hpp"
+#include "NodeGraphicsObject.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 
+#include <algorithm>
 #include <utility>
 
 using QtNodes::DataFlowGraphModel;
@@ -15,7 +18,7 @@ using QtNodes::NodeId;
 
 int NodeGroup::_groupCount = 0;
 
-NodeGroup::NodeGroup(std::vector<NodeGraphicsObject *> nodes,
+NodeGroup::NodeGroup(std::vector<NodeId> nodes,
                      GroupId groupId,
                      QString name,
                      QObject *parent)
@@ -35,23 +38,32 @@ QByteArray NodeGroup::saveToFile() const
     groupJson["name"] = _name;
     groupJson["id"] = static_cast<qint64>(_id);
 
+    // CICADA (ADR-1638): the nodes are saved from the model, which every node
+    // is in, whether or not the scene made an item for it.
     QJsonArray nodesJson;
-    for (auto const &node : _childNodes) {
-        if (!node)
-            continue;
-
-        QJsonObject const nodeJson = node->save();
-        if (nodeJson.isEmpty())
-            continue;
-
-        nodesJson.append(nodeJson);
+    if (auto *scene = qobject_cast<BasicGraphicsScene *>(parent())) {
+        for (NodeId const nodeId : _childNodes) {
+            QJsonObject nodeJson = scene->graphModel().saveNode(nodeId);
+            if (nodeJson.isEmpty()) {
+                nodeJson["id"] = QString::number(nodeId);
+                QJsonObject obj;
+                QPointF const pos
+                    = scene->graphModel().nodeData(nodeId, NodeRole::Position).value<QPointF>();
+                obj["x"] = pos.x();
+                obj["y"] = pos.y();
+                nodeJson["position"] = obj;
+            }
+            nodesJson.append(nodeJson);
+        }
     }
     groupJson["nodes"] = nodesJson;
 
     QJsonArray connectionsJson;
-    auto groupConnections = _groupGraphicsObject->connections();
-    for (auto const &connection : groupConnections) {
-        connectionsJson.append(toJson(*connection));
+    if (auto *scene = qobject_cast<BasicGraphicsScene *>(parent())) {
+        auto groupConnections = scene->connectionsWithinGroup(_id);
+        for (auto const &connection : groupConnections) {
+            connectionsJson.append(toJson(*connection));
+        }
     }
     groupJson["connections"] = connectionsJson;
 
@@ -75,21 +87,27 @@ GroupGraphicsObject const &NodeGroup::groupGraphicsObject() const
     return *_groupGraphicsObject;
 }
 
-std::vector<NodeGraphicsObject *> &NodeGroup::childNodes()
+std::vector<NodeGraphicsObject *> NodeGroup::childNodes() const
 {
-    return _childNodes;
+    std::vector<NodeGraphicsObject *> items;
+    items.reserve(_childNodes.size());
+    if (auto *scene = qobject_cast<BasicGraphicsScene *>(parent())) {
+        for (NodeId const nodeId : _childNodes) {
+            if (NodeGraphicsObject *item = scene->nodeGraphicsObject(nodeId))
+                items.push_back(item);
+        }
+    }
+    return items;
 }
 
 std::vector<NodeId> NodeGroup::nodeIDs() const
 {
-    std::vector<NodeId> ret{};
-    ret.reserve(_childNodes.size());
+    return _childNodes;
+}
 
-    for (auto const &node : _childNodes) {
-        ret.push_back(node->nodeId());
-    }
-
-    return ret;
+bool NodeGroup::contains(NodeId nodeId) const
+{
+    return std::find(_childNodes.begin(), _childNodes.end(), nodeId) != _childNodes.end();
 }
 
 QString const &NodeGroup::name() const
@@ -122,19 +140,38 @@ int NodeGroup::groupCount()
 
 void NodeGroup::addNode(NodeGraphicsObject *node)
 {
-    _childNodes.push_back(node);
+    if (node != nullptr)
+        addNodeId(node->nodeId());
+}
+
+void NodeGroup::addNodeId(NodeId nodeId)
+{
+    _childNodes.push_back(nodeId);
     if (_groupGraphicsObject && _groupGraphicsObject->locked()) {
-        node->lock(true);
+        if (auto *scene = qobject_cast<BasicGraphicsScene *>(parent())) {
+            if (NodeGraphicsObject *item = scene->nodeGraphicsObject(nodeId))
+                item->lock(true);
+        }
     }
 }
 
 void NodeGroup::removeNode(NodeGraphicsObject *node)
 {
-    auto nodeIt = std::find(_childNodes.begin(), _childNodes.end(), node);
+    if (node != nullptr)
+        removeNodeId(node->nodeId());
+}
+
+void NodeGroup::removeNodeId(NodeId nodeId)
+{
+    auto nodeIt = std::find(_childNodes.begin(), _childNodes.end(), nodeId);
 
     if (nodeIt != _childNodes.end()) {
-        (*nodeIt)->unsetNodeGroup();
+        if (auto *scene = qobject_cast<BasicGraphicsScene *>(parent())) {
+            if (NodeGraphicsObject *item = scene->nodeGraphicsObject(nodeId))
+                item->unsetNodeGroup();
+        }
         _childNodes.erase(nodeIt);
-        groupGraphicsObject().positionLockedIcon();
+        if (_groupGraphicsObject)
+            _groupGraphicsObject->positionLockedIcon();
     }
 }

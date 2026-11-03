@@ -82,20 +82,8 @@ DataFlowGraphicsScene::DataFlowGraphicsScene(DataFlowGraphModel &graphModel, QOb
 
 std::vector<NodeId> DataFlowGraphicsScene::selectedNodes() const
 {
-    QList<QGraphicsItem *> graphicsItems = selectedItems();
-
-    std::vector<NodeId> result;
-    result.reserve(graphicsItems.size());
-
-    for (QGraphicsItem *item : graphicsItems) {
-        auto ngo = qgraphicsitem_cast<NodeGraphicsObject *>(item);
-
-        if (ngo != nullptr) {
-            result.push_back(ngo->nodeId());
-        }
-    }
-
-    return result;
+    // CICADA (ADR-1638): the scene's selection set, not the items that exist.
+    return selectedNodeIds();
 }
 
 QMenu *DataFlowGraphicsScene::createSceneMenu(QPointF const scenePos)
@@ -265,13 +253,14 @@ bool DataFlowGraphicsScene::load()
             QJsonObject const groupObject = groupValue.toObject();
 
             QJsonArray const nodeIdsJson = groupObject["nodes"].toArray();
-            std::vector<NodeGraphicsObject *> groupNodes;
+            std::vector<NodeId> groupNodes;
             groupNodes.reserve(nodeIdsJson.size());
 
+            // CICADA (ADR-1638): members by id; a node needs no item.
             for (QJsonValue idValue : nodeIdsJson) {
                 NodeId const nodeId = static_cast<NodeId>(idValue.toInt());
-                if (auto *nodeObject = nodeGraphicsObject(nodeId)) {
-                    groupNodes.push_back(nodeObject);
+                if (graphModel().nodeExists(nodeId)) {
+                    groupNodes.push_back(nodeId);
                 }
             }
 
@@ -281,10 +270,11 @@ bool DataFlowGraphicsScene::load()
             QString const groupName = groupObject["name"].toString();
             GroupId const groupId = jsonValueToGroupId(groupObject["id"]);
 
-            auto const groupWeak = createGroup(groupNodes, groupName, groupId);
+            auto const groupWeak = createGroupFromIds(groupNodes, groupName, groupId);
             if (auto group = groupWeak.lock()) {
                 bool const locked = groupObject["locked"].toBool(true);
-                group->groupGraphicsObject().lock(locked);
+                if (itemPolicy() != ItemPolicy::None)
+                    group->groupGraphicsObject().lock(locked);
             }
         }
     }

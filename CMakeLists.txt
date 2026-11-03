@@ -89,6 +89,26 @@ set(CPP_SOURCE_FILES
   src/locateNode.cpp
   src/GroupGraphicsObject.cpp
   src/NodeGroup.cpp
+  # CICADA (ADR-1631): the painted canvas. One painter file per RowKind, so a
+  # converted node never edits a shared file.
+  src/CanvasConfig.cpp
+  src/FaceLayout.cpp
+  src/NodeFace.cpp
+  src/NodeFacePainter.cpp
+  src/rows/RowOpsCommon.cpp
+  src/rows/LabelRowPainter.cpp
+  src/rows/BoolRowPainter.cpp
+  src/rows/IntRowPainter.cpp
+  src/rows/DoubleRowPainter.cpp
+  src/rows/EnumRowPainter.cpp
+  src/rows/StringRowPainter.cpp
+  src/rows/Vec3RowPainter.cpp
+  src/rows/ButtonRowPainter.cpp
+  src/rows/SectionRowPainter.cpp
+  src/rows/SliderRowPainter.cpp
+  src/rows/SwatchRowPainter.cpp
+  src/rows/TableRowPainter.cpp
+  src/rows/PortAlignRowPainter.cpp
   resources/resources.qrc
 )
 
@@ -131,6 +151,11 @@ set(HPP_HEADER_FILES
   include/QtNodes/internal/UndoCommands.hpp
   include/QtNodes/internal/NodeGroup.hpp
   include/QtNodes/internal/GroupGraphicsObject.hpp
+  include/QtNodes/internal/CanvasConfig.hpp
+  include/QtNodes/internal/FaceLayout.hpp
+  include/QtNodes/internal/NodeFace.hpp
+  include/QtNodes/internal/NodeFaceEditorHost.hpp
+  include/QtNodes/internal/NodeFacePainter.hpp
 )
 
 # If we want to give the option to build a static library,

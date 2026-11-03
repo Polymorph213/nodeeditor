@@ -10,9 +10,12 @@
 #include "NodeGroup.hpp"
 #include "StyleCollection.hpp"
 #include "UndoCommands.hpp"
+#include "CanvasConfig.hpp"
+#include "NodeFace.hpp"
+#include "NodeFaceEditorHost.hpp"
+#include "NodeFacePainter.hpp"
 #include "cicada/util/CommandTrace.h" // CICADA: command trace (ADR-1495)
 #include "cicada/util/FixedCost.h"    // CICADA: fixed-cost switches (ADR-1500)
-#include "cicada/util/WidgetResidency.h" // CICADA: live widgets (ADR-1620)
 #include <QString>
 
 #include <QtWidgets/QGraphicsEffect>
@@ -117,7 +120,11 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
 
     setZValue(0);
 
-    embedQWidget(true);
+    // CICADA (ADR-1631): a painted node owns no widget. Its rows are painted
+    // over the body, and its size comes from them (NodeFace.hpp).
+    _painted = canvasConfig().painted;
+    if (!_painted)
+        embedQWidget(true);
 
     nodeScene()->nodeGeometry().recomputeSize(_nodeId);
 
@@ -133,6 +140,15 @@ NodeGraphicsObject::NodeGraphicsObject(BasicGraphicsScene &scene, NodeId nodeId)
 
 NodeGraphicsObject::~NodeGraphicsObject()
 {
+    // CICADA (ADR-1631): an editor, a gesture or a pop-up on this node ends
+    // with its item.
+    if (_painted) {
+        if (auto *scene = nodeScene()) {
+            if (auto *host = scene->faceEditorHost())
+                host->faceNodeGone(_nodeId);
+        }
+    }
+
     // CICADA (ADR-1500): a widget that never reached a proxy has no owner.
     if (_proxyWidget == nullptr && !_unembedded.isNull())
         _unembedded->deleteLater();
@@ -161,134 +177,12 @@ void NodeGraphicsObject::embedPendingWidget()
     if (_proxyWidget != nullptr || _unembedded.isNull())
         return;
 
-    CICADA_TRACE_AS(Ui, "QtNodes.embedPendingWidget");
     // The widget is shown now, so its size may differ from the one the node
     // was given without a window.
-    AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
-    QSize const before = geometry.size(_nodeId);
     prepareGeometryChange();
     embedQWidget(false);
     update();
-    // CICADA (ADR-1620): a node whose size did not move has not moved its
-    // wires, and the world plane has one for every object of the document.
-    bool const moved = geometry.size(_nodeId) != before;
-    if (moved || !cicada::widgetresidency::enabled())
-        moveConnections();
-    nodeScene()->noteWidgetEmbedded(moved);
-}
-
-bool NodeGraphicsObject::widgetPinned() const
-{
-    if (_proxyWidget == nullptr)
-        return false;
-    // A pop-up the widget opened lives in a proxy of its own, under this one.
-    if (!_proxyWidget->childItems().isEmpty())
-        return true;
-    QGraphicsScene *const sc = scene();
-    if (sc == nullptr)
-        return false;
-    if (sc->mouseGrabberItem() == _proxyWidget)
-        return true;
-    QGraphicsItem const *const focus = sc->focusItem();
-    return focus != nullptr && (focus == _proxyWidget || _proxyWidget->isAncestorOf(focus));
-}
-
-bool NodeGraphicsObject::releaseWidget()
-{
-    if (_proxyWidget == nullptr || widgetPinned())
-        return false;
-    QWidget *const w = _proxyWidget->widget();
-    if (w == nullptr)
-        return false;
-
-    CICADA_TRACE_AS(Ui, "QtNodes.releaseWidget");
-    prepareGeometryChange();
-    w->removeEventFilter(this);
-    // The proxy owns its widget and deletes it with itself: setWidget(nullptr)
-    // gives the widget back first (a Qt probe: the widget lives on, window and
-    // all, until it is taken out of its window).
-    _proxyWidget->setWidget(nullptr);
-    delete _proxyWidget;
-    _proxyWidget = nullptr;
-
-    // The window and the backing store (2 GDI objects) stay with a widget that
-    // is only taken out of a proxy. Made a child and a top-level widget again,
-    // it gives both up and is as a widget that was never embedded.
-    QWidget *const limbo = nodeScene()->widgetLimbo();
-    w->setParent(limbo);
-    w->setParent(nullptr);
-    _unembedded = w;
-
-    // What the proxy's resize filter would have done for a change made while
-    // the widget was live, and `pendingWidgetChanged` does for one made later.
-    AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
-    QSize const before = geometry.size(_nodeId);
-    w->ensurePolished();
-    w->adjustSize();
-    geometry.recomputeSize(_nodeId);
-    update();
-    if (geometry.size(_nodeId) != before)
-        moveConnections();
-    return true;
-}
-
-QRectF NodeGraphicsObject::pendingWidgetRect() const
-{
-    if (_unembedded.isNull())
-        return QRectF();
-    return QRectF(nodeScene()->nodeGeometry().widgetPosition(_nodeId),
-                  QSizeF(_unembedded->size()));
-}
-
-bool NodeGraphicsObject::forwardToWidget(QGraphicsSceneMouseEvent *event)
-{
-    if (_proxyWidget == nullptr || scene() == nullptr)
-        return false;
-
-    QGraphicsSceneMouseEvent copy(event->type());
-    copy.setScenePos(event->scenePos());
-    copy.setScreenPos(event->screenPos());
-    copy.setLastScenePos(event->lastScenePos());
-    copy.setLastScreenPos(event->lastScreenPos());
-    for (Qt::MouseButton const button : {Qt::LeftButton, Qt::RightButton, Qt::MiddleButton}) {
-        copy.setButtonDownScenePos(button, event->buttonDownScenePos(button));
-        copy.setButtonDownScreenPos(button, event->buttonDownScreenPos(button));
-        copy.setButtonDownPos(button, _proxyWidget->mapFromScene(event->buttonDownScenePos(button)));
-    }
-    copy.setButtons(event->buttons());
-    copy.setButton(event->button());
-    copy.setModifiers(event->modifiers());
-    copy.setSource(event->source());
-    copy.setFlags(event->flags());
-    copy.setWidget(event->widget());
-    copy.setTimestamp(event->timestamp());
-    copy.setPos(_proxyWidget->mapFromScene(event->scenePos()));
-    copy.setLastPos(_proxyWidget->mapFromScene(event->lastScenePos()));
-    copy.setAccepted(false);
-    scene()->sendEvent(_proxyWidget, &copy);
-    return copy.isAccepted();
-}
-
-void NodeGraphicsObject::paintPendingWidget(QPainter *painter,
-                                            QStyleOptionGraphicsItem const *option) const
-{
-    QWidget *const w = _unembedded.data();
-    if (w == nullptr)
-        return;
-
-    // The proxy paints only what is exposed, in the widget's own coordinates.
-    QPointF const origin = nodeScene()->nodeGeometry().widgetPosition(_nodeId);
-    QRect const source = option->exposedRect.translated(-origin).toAlignedRect()
-                         & QRect(QPoint(0, 0), w->size());
-    if (source.isEmpty())
-        return;
-
-    painter->save();
-    // A proxy ignores its node's opacity (ItemDoesntPropagateOpacityToChildren).
-    painter->setOpacity(1.0);
-    painter->translate(origin);
-    w->render(painter, source.topLeft(), QRegion(source), QWidget::DrawChildren);
-    painter->restore();
+    moveConnections();
 }
 
 bool NodeGraphicsObject::hasPendingWidget() const
@@ -323,13 +217,8 @@ void NodeGraphicsObject::embedQWidget(bool mayDefer)
         // and Qt makes a native window for it (CreateWindowEx, 5 ms or more
         // each). A scene no view shows needs none: the node is given the size
         // its widget has, and the proxy waits for a view to show the scene.
-        // CICADA (ADR-1620): with residency on, a node never starts with one:
-        // the scene gives a window to the nodes a view shows at a readable
-        // scale, a few hundred at most, and takes it back from the rest.
-        if (mayDefer
-            && (cicada::widgetresidency::enabled()
-                || (cicada::fixedcost::enabled(cicada::fixedcost::Change::LazyNodeWidgets)
-                    && !nodeScene()->hasVisibleView()))) {
+        if (mayDefer && cicada::fixedcost::enabled(cicada::fixedcost::Change::LazyNodeWidgets)
+            && !nodeScene()->hasVisibleView()) {
             w->ensurePolished();
             w->adjustSize();
             geometry.recomputeSize(_nodeId);
@@ -458,15 +347,88 @@ void NodeGraphicsObject::paint(QPainter *painter, QStyleOptionGraphicsItem const
             tooltip = state._stateMessage;
         }
     }
-    setToolTip(tooltip);
+    // CICADA (ADR-1642): a tooltip is set when it changes, not on every paint
+    // (a set is a string compare and a tooltip refresh).
+    if (tooltip != toolTip())
+        setToolTip(tooltip);
 
     painter->setClipRect(option->exposedRect);
 
     nodeScene()->nodePainter().paint(painter, *this);
 
-    // CICADA (ADR-1620): over the node's body, where its proxy would paint.
-    if (_proxyWidget == nullptr && !_unembedded.isNull())
-        paintPendingWidget(painter, option);
+    // CICADA (ADR-1631): the rows, where the proxy of a legacy node sat.
+    if (_painted) {
+        NodeFaceSource &face = faceOf(_graphModel, _nodeId);
+        FaceLayoutResult const &layout
+            = cachedLayout(face, faceMetrics(), TextMetrics::application());
+        if (!layout.rows.empty()) {
+            FacePaintState state;
+            state.background = _faceBackground;
+            state.hoverRow = _faceHover.row;
+            state.hoverPart = _faceHover.part;
+            state.editRow = _editRow;
+            state.editComponent = _editComponent;
+            painter->save();
+            painter->translate(nodeScene()->nodeGeometry().widgetPosition(_nodeId));
+            NodeFacePainter::paint(*painter, face, layout, state);
+            painter->restore();
+        }
+    }
+}
+
+void NodeGraphicsObject::setFaceBackground(QColor const &color)
+{
+    if (_faceBackground == color)
+        return;
+    _faceBackground = color;
+    update();
+}
+
+QRectF NodeGraphicsObject::faceRect() const
+{
+    if (!_painted)
+        return QRectF();
+    NodeFaceSource &face = faceOf(_graphModel, _nodeId);
+    FaceLayoutResult const &layout
+        = cachedLayout(face, faceMetrics(), TextMetrics::application());
+    if (layout.rows.empty())
+        return QRectF();
+    return QRectF(nodeScene()->nodeGeometry().widgetPosition(_nodeId), QSizeF(layout.size));
+}
+
+FaceHit NodeGraphicsObject::faceHitAt(QPointF const &pos) const
+{
+    if (!_painted)
+        return FaceHit();
+    QRectF const body = faceRect();
+    if (!body.contains(pos))
+        return FaceHit();
+    NodeFaceSource &face = faceOf(_graphModel, _nodeId);
+    FaceLayoutResult const &layout
+        = cachedLayout(face, faceMetrics(), TextMetrics::application());
+    return hitTest(layout, (pos - body.topLeft()).toPoint());
+}
+
+void NodeGraphicsObject::faceChanged()
+{
+    if (!_painted || nodeScene() == nullptr)
+        return;
+    AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
+    QSize const before = geometry.size(_nodeId);
+    prepareGeometryChange();
+    geometry.recomputeSize(_nodeId);
+    update();
+    if (geometry.size(_nodeId) != before)
+        moveConnections();
+}
+
+void NodeGraphicsObject::setFaceEditing(int row, int component)
+{
+    if (_editRow == row && _editComponent == component)
+        return;
+    _editRow = row;
+    _editComponent = component;
+    update();
 }
 
 QVariant NodeGraphicsObject::itemChange(GraphicsItemChange change, const QVariant &value)
@@ -484,6 +446,12 @@ QVariant NodeGraphicsObject::itemChange(GraphicsItemChange change, const QVarian
         _graphModel.setNodeData(_nodeId, NodeRole::Position, pos());
     }
 
+    // CICADA (ADR-1638): the scene's selection set follows the item, so that a
+    // copy, a cut or a group acts on node ids, never on the items that happen
+    // to exist.
+    if (change == ItemSelectedHasChanged && scene() && nodeScene())
+        nodeScene()->noteNodeSelection(_nodeId, value.toBool());
+
     return QGraphicsObject::itemChange(change, value);
 }
 
@@ -494,16 +462,20 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
         return;
     }
 
-    // CICADA (ADR-1620): a press on the widget of a node a view shows without
-    // a window (zoomed out, past the cap, or before the scene got to it) makes
-    // the window now and hands the press to it, so the editor works wherever
-    // it can be seen.
-    if (hasPendingWidget() && pendingWidgetRect().contains(event->pos())) {
-        embedPendingWidget();
-        if (forwardToWidget(event)) {
-            _forwardingToWidget = true;
-            event->accept();
-            return;
+    // CICADA (ADR-1631): a press on a control of a painted node goes to the
+    // editor host; the node keeps the grab until the release.
+    if (_painted && event->button() == Qt::LeftButton) {
+        FaceHit const hit = faceHitAt(event->pos());
+        if (hit.row >= 0 && hit.part != FacePart::Body && hit.part != FacePart::Label
+            && hit.part != FacePart::None) {
+            if (NodeFaceEditorHost *host = nodeScene()->faceEditorHost()) {
+                if (host->facePress(*this, hit, *event)) {
+                    _faceGrab = true;
+                    _facePressed = hit;
+                    event->accept();
+                    return;
+                }
+            }
         }
     }
 
@@ -631,12 +603,16 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
             // Need ConnectionGraphicsObject
 
-            NodeConnectionInteraction interaction(*this,
-                                                  *nodeScene()->connectionGraphicsObject(cnId),
-                                                  *nodeScene());
+            // CICADA (ADR-1638): a wire has an item only while the scene makes
+            // items for it; a press on a port of a node that has one detaches
+            // the wire, which asks for the item it is about to drag.
+            ConnectionGraphicsObject *const wire = nodeScene()->connectionGraphicsObject(cnId);
+            if (wire != nullptr) {
+                NodeConnectionInteraction interaction(*this, *wire, *nodeScene());
 
-            if (_graphModel.detachPossible(cnId))
-                interaction.disconnect(portToCheck);
+                if (_graphModel.detachPossible(cnId))
+                    interaction.disconnect(portToCheck);
+            }
         } else // initialize new Connection
         {
             if (portToCheck == PortType::Out) {
@@ -679,8 +655,10 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
 void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
-    if (_forwardingToWidget) {
-        (void) forwardToWidget(event);
+    // CICADA (ADR-1631): a taken press on a row goes on to the editor host.
+    if (_faceGrab) {
+        if (NodeFaceEditorHost *host = nodeScene()->faceEditorHost())
+            host->faceMove(*this, _facePressed, *event);
         event->accept();
         return;
     }
@@ -695,7 +673,7 @@ void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
         setSelected(true);
     }
 
-    if (_nodeState.resizing()) {
+    if (_nodeState.resizing() && !_painted) {
         auto diff = event->pos() - event->lastPos();
 
         if (auto w = _graphModel.nodeData<QWidget *>(_nodeId, NodeRole::Widget)) {
@@ -784,9 +762,11 @@ void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 
 void NodeGraphicsObject::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
-    if (_forwardingToWidget) {
-        _forwardingToWidget = false;
-        (void) forwardToWidget(event);
+    // CICADA (ADR-1631): the release of a taken press ends the gesture.
+    if (_faceGrab) {
+        _faceGrab = false;
+        if (NodeFaceEditorHost *host = nodeScene()->faceEditorHost())
+            host->faceRelease(*this, _facePressed);
         event->accept();
         return;
     }
@@ -844,6 +824,7 @@ void NodeGraphicsObject::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 
     setZValue(0.0);
 
+    _faceHover = FaceHit();
     update();
 
     Q_EMIT nodeScene()->nodeHoverLeft(_nodeId);
@@ -854,6 +835,15 @@ void NodeGraphicsObject::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 void NodeGraphicsObject::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 {
     auto pos = event->pos();
+
+    // CICADA (ADR-1631): the row under the pointer, for the hover look.
+    if (_painted) {
+        FaceHit const hit = faceHitAt(pos);
+        if (hit.row != _faceHover.row || hit.part != _faceHover.part) {
+            _faceHover = hit;
+            update();
+        }
+    }
 
     //NodeGeometry geometry(_nodeId, _graphModel, nodeScene());
     AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
@@ -868,8 +858,53 @@ void NodeGraphicsObject::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
     event->accept();
 }
 
+void NodeGraphicsObject::wheelEvent(QGraphicsSceneWheelEvent *event)
+{
+    // CICADA (ADR-1631): over a number row the wheel steps it, one step a
+    // notch (ADR-0354); anywhere else it is the view's (zoom).
+    if (_painted) {
+        FaceHit const hit = faceHitAt(event->pos());
+        if (hit.row >= 0 && hit.part != FacePart::None && hit.part != FacePart::Body) {
+            if (NodeFaceEditorHost *host = nodeScene()->faceEditorHost()) {
+                int const notches = event->delta() / 120;
+                if (notches != 0 && host->faceWheel(*this, hit, notches)) {
+                    event->accept();
+                    return;
+                }
+            }
+        }
+    }
+    event->ignore();
+}
+
+bool NodeGraphicsObject::sceneEvent(QEvent *event)
+{
+    // CICADA (ADR-1631): a grab lost mid-gesture (a focus change, a deletion)
+    // ends it, as the lost-release guards of ADR-0354 end a spin-arrow hold.
+    if (event->type() == QEvent::UngrabMouse && _faceGrab) {
+        _faceGrab = false;
+        if (BasicGraphicsScene *scene = nodeScene()) {
+            if (NodeFaceEditorHost *host = scene->faceEditorHost())
+                host->faceRelease(*this, _facePressed);
+        }
+    }
+    return QGraphicsObject::sceneEvent(event);
+}
+
 void NodeGraphicsObject::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event)
 {
+    if (_painted) {
+        FaceHit const hit = faceHitAt(event->pos());
+        if (hit.row >= 0 && hit.part != FacePart::Body && hit.part != FacePart::Label
+            && hit.part != FacePart::None) {
+            if (NodeFaceEditorHost *host = nodeScene()->faceEditorHost()) {
+                if (host->faceDoubleClick(*this, hit)) {
+                    event->accept();
+                    return;
+                }
+            }
+        }
+    }
     QGraphicsItem::mouseDoubleClickEvent(event);
 
     Q_EMIT nodeScene()->nodeDoubleClicked(_nodeId);

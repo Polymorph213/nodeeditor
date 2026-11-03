@@ -11,7 +11,10 @@
 #include "NodeState.hpp"
 #include "StyleCollection.hpp"
 
+#include <QtCore/QCoreApplication>
+#include <QtCore/QHash>
 #include <QtCore/QMargins>
+#include <QtCore/QPair>
 
 #include <cmath>
 
@@ -21,6 +24,41 @@
 #include "cicada/ui/WireColors.h"
 
 namespace QtNodes {
+
+namespace {
+
+/// CICADA (ADR-1642): the node's style, read from its delegate. The style used
+/// to be written to JSON, parsed back and rebuilt at every draw of every part
+/// of the node (seven times a paint); the delegate holds the same object the
+/// JSON was made from.
+/// \param storage Filled only when the model is not a DataFlowGraphModel.
+NodeStyle const &nodeStyleFor(AbstractGraphModel &model, NodeId nodeId, NodeStyle &storage)
+{
+    if (auto *flow = dynamic_cast<DataFlowGraphModel *>(&model)) {
+        if (auto *delegate = flow->delegateModel<NodeDelegateModel>(nodeId))
+            return delegate->nodeStyle();
+    }
+    QJsonDocument const json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
+    storage = NodeStyle(json.object());
+    return storage;
+}
+
+/// CICADA (ADR-1642): the picture of a node's icon file, decoded once for the
+/// process and shared by every node of the type.
+QPixmap sharedIconFile(QString const &path)
+{
+    static QHash<QString, QPixmap> cache;
+    auto const it = cache.constFind(path);
+    if (it != cache.constEnd())
+        return it.value();
+    QPixmap pm(QCoreApplication::applicationDirPath() + QLatin1Char('/') + path);
+    if (pm.isNull())
+        pm = QPixmap(path);
+    cache.insert(path, pm);
+    return pm;
+}
+
+} // namespace
 
 void DefaultNodePainter::paint(QPainter *painter, NodeGraphicsObject &ngo) const
 {
@@ -59,9 +97,8 @@ void DefaultNodePainter::drawNodeRect(QPainter *painter, NodeGraphicsObject &ngo
 
     QSize size = geometry.size(nodeId);
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     QVariant var = model.nodeData(nodeId, NodeRole::ValidationState);
 
@@ -122,8 +159,8 @@ void DefaultNodePainter::drawConnectionPoints(QPainter *painter, NodeGraphicsObj
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     auto const &connectionStyle = StyleCollection::connectionStyle();
 
@@ -206,8 +243,8 @@ void DefaultNodePainter::drawFilledConnectionPoints(QPainter *painter, NodeGraph
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     auto diameter = nodeStyle.ConnectionPointDiameter;
 
@@ -283,8 +320,8 @@ void DefaultNodePainter::drawNodeCaption(QPainter *painter, NodeGraphicsObject &
 
     QPointF position(centerX - bounding.width() / 2.0, capPos.y());
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(f);
     painter->setPen(nodeStyle.FontColor);
@@ -322,8 +359,8 @@ void DefaultNodePainter::drawNodeLabel(QPainter *painter, NodeGraphicsObject &ng
 
     QPointF position(centerX - bounding.width() / 2.0, y);
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(f);
     painter->setPen(nodeStyle.FontColor);
@@ -339,8 +376,8 @@ void DefaultNodePainter::drawEntryLabels(QPainter *painter, NodeGraphicsObject &
     NodeId const nodeId = ngo.nodeId();
     AbstractNodeGeometry &geometry = ngo.nodeScene()->nodeGeometry();
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     for (PortType portType : {PortType::Out, PortType::In}) {
         unsigned int n = model.nodeData<unsigned int>(nodeId,
@@ -404,7 +441,8 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
     // etc.). The processing status is already conveyed by the validation
     // border colour + top-right validation icon — the bottom corner is a
     // better home for a category-identifying glyph.
-    QPixmap pixmap = delegate->nodeIcon();
+    QString const iconPath = delegate->nodeIconPath();
+    QPixmap pixmap = iconPath.isEmpty() ? delegate->nodeIcon() : sharedIconFile(iconPath);
     if (pixmap.isNull())
         return;
 
@@ -434,10 +472,17 @@ void DefaultNodePainter::drawProcessingIndicator(QPainter *painter, NodeGraphics
     }
 
     QRect r(x, size.height() - iconSize - margin, iconSize, iconSize);
-    painter->drawPixmap(r,
-                        pixmap.scaled(r.size(),
-                                      Qt::KeepAspectRatio,
-                                      Qt::SmoothTransformation));
+    // CICADA (ADR-1642): scaled once per picture and size, not on every draw.
+    static QHash<QPair<qint64, QPair<int, int>>, QPixmap> scaledCache;
+    auto const key = qMakePair(pixmap.cacheKey(), qMakePair(r.width(), r.height()));
+    auto scaled = scaledCache.constFind(key);
+    if (scaled == scaledCache.constEnd()) {
+        scaled = scaledCache.insert(key,
+                                    pixmap.scaled(r.size(),
+                                                  Qt::KeepAspectRatio,
+                                                  Qt::SmoothTransformation));
+    }
+    painter->drawPixmap(r, scaled.value());
 }
 
 void DefaultNodePainter::drawValidationIcon(QPainter *painter, NodeGraphicsObject &ngo) const
@@ -454,22 +499,29 @@ void DefaultNodePainter::drawValidationIcon(QPainter *painter, NodeGraphicsObjec
     if (state._state == NodeValidationState::State::Valid)
         return;
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     QSize size = geometry.size(nodeId);
 
-    QIcon icon(":/info-tooltip.svg");
     QSize iconSize(16, 16);
-    QPixmap pixmap = icon.pixmap(iconSize);
 
     QColor color = (state._state == NodeValidationState::State::Error) ? nodeStyle.ErrorColor
                                                                        : nodeStyle.WarningColor;
 
-    QPainter imgPainter(&pixmap);
-    imgPainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-    imgPainter.fillRect(pixmap.rect(), color);
-    imgPainter.end();
+    // CICADA (ADR-1642): the tinted icon is built once per colour, not on every
+    // draw of an invalid node.
+    static QHash<QRgb, QPixmap> tinted;
+    auto cached = tinted.constFind(color.rgba());
+    if (cached == tinted.constEnd()) {
+        QPixmap tintedPixmap = QIcon(":/info-tooltip.svg").pixmap(iconSize);
+        QPainter imgPainter(&tintedPixmap);
+        imgPainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        imgPainter.fillRect(tintedPixmap.rect(), color);
+        imgPainter.end();
+        cached = tinted.insert(color.rgba(), tintedPixmap);
+    }
+    QPixmap const pixmap = cached.value();
 
     QPointF center(size.width(), 0.0);
     center += QPointF(iconSize.width() / 2.0, -iconSize.height() / 2.0);
@@ -494,8 +546,8 @@ void DefaultNodePainter::drawProgressValue(QPainter *painter, NodeGraphicsObject
     QSize size = geometry.size(nodeId);
     QPointF position(rect.width() / 1.5, size.height() - 1.0 * rect.height());
 
-    QJsonDocument json = QJsonDocument::fromVariant(model.nodeData(nodeId, NodeRole::Style));
-    NodeStyle nodeStyle(json.object());
+    NodeStyle styleStorage;
+    NodeStyle const &nodeStyle = nodeStyleFor(model, nodeId, styleStorage);
 
     painter->setFont(font);
     painter->setPen(nodeStyle.FontColor);

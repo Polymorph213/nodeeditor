@@ -389,10 +389,11 @@ void GraphicsView::keyPressEvent(QKeyEvent *event)
         BasicGraphicsScene *sc = nodeScene();
 
         if (sc) {
-            QList<QGraphicsItem *> items = sc->selectedItems();
+            // CICADA (ADR-1638): the first selected node by id; its item is
+            // made now when the scene has none (the label edit sits on it).
             NodeGraphicsObject *ngo = nullptr;
-            for (QGraphicsItem *it : items) {
-                ngo = qgraphicsitem_cast<NodeGraphicsObject *>(it);
+            for (NodeId const selectedId : sc->selectedNodeIds()) {
+                ngo = sc->ensureNodeItem(selectedId);
 
                 if (ngo)
                     break;
@@ -625,15 +626,6 @@ void GraphicsView::showEvent(QShowEvent *event)
     centerScene();
 }
 
-void GraphicsView::paintEvent(QPaintEvent *event)
-{
-    QGraphicsView::paintEvent(event);
-
-    // CICADA (ADR-1620): every pan, zoom, fit and resize ends in a paint.
-    if (auto *basic = nodeScene())
-        basic->noteViewPainted(this);
-}
-
 BasicGraphicsScene *GraphicsView::nodeScene()
 {
     return dynamic_cast<BasicGraphicsScene *>(scene());
@@ -657,7 +649,21 @@ void GraphicsView::zoomFitAll()
 
 void GraphicsView::zoomFitSelected()
 {
-    if (scene()->selectedItems().count() > 0) {
+    // CICADA (ADR-1638): the selected nodes by id; a node with no item is
+    // framed by the position and the size the model holds.
+    BasicGraphicsScene *const sc = nodeScene();
+    if (sc != nullptr && !sc->selectedNodeIds().empty()) {
+        QRectF unitedBoundingRect{};
+
+        for (NodeId const nodeId : sc->selectedNodeIds()) {
+            QPointF const pos
+                = sc->graphModel().nodeData(nodeId, NodeRole::Position).value<QPointF>();
+            QSize const size = sc->graphModel().nodeData(nodeId, NodeRole::Size).value<QSize>();
+            unitedBoundingRect = unitedBoundingRect.united(QRectF(pos, QSizeF(size)));
+        }
+
+        fitInView(unitedBoundingRect, Qt::KeepAspectRatio);
+    } else if (scene()->selectedItems().count() > 0) {
         QRectF unitedBoundingRect{};
 
         for (QGraphicsItem *item : scene()->selectedItems()) {

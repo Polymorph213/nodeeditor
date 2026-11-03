@@ -189,6 +189,9 @@ public:
     void setPosition(const QPointF &position);
 
 protected:
+    /// CICADA (ADR-1638): the scene's selection set follows this item.
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
+
     /** @copydoc QGraphicsItem::paint() */
     void paint(QPainter *painter,
                QStyleOptionGraphicsItem const *option,

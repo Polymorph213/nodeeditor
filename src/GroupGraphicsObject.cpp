@@ -74,6 +74,13 @@ NodeGroup const &GroupGraphicsObject::group() const
     return _group;
 }
 
+QVariant GroupGraphicsObject::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemSelectedHasChanged && scene())
+        _scene.noteGroupSelection(_group.id(), value.toBool());
+    return QGraphicsRectItem::itemChange(change, value);
+}
+
 QRectF GroupGraphicsObject::boundingRect() const
 {
     QRectF ret{};

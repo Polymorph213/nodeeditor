@@ -1,7 +1,10 @@
 #include "DefaultHorizontalNodeGeometry.hpp"
 
 #include "AbstractGraphModel.hpp"
+#include "CanvasConfig.hpp"
+#include "FaceLayout.hpp"
 #include "NodeData.hpp"
+#include "NodeFace.hpp"
 
 #include <QPoint>
 #include <QRect>
@@ -56,7 +59,21 @@ void DefaultHorizontalNodeGeometry::recomputeSize(NodeId const nodeId) const
 {
     unsigned int height = maxVerticalPortsExtent(nodeId);
 
-    if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
+    // CICADA (ADR-1631): on the painted canvas the body is the node's face,
+    // sized by its layout; the model is never asked for a widget.
+    QSize faceSize;
+    if (canvasConfig().painted) {
+        faceSize = cachedLayout(faceOf(_graphModel, nodeId), faceMetrics(),
+                                TextMetrics::application())
+                       .size;
+        height = std::max(height, static_cast<unsigned int>(faceSize.height()));
+        // The legacy proxy set the widget's least height to the node's own
+        // less its caption, so the node ended taller than the greater of its
+        // ports and its widget by that much (FaceMetrics::portBodyExtra).
+        if (faceOf(_graphModel, nodeId).alignsToPorts()) {
+            height += static_cast<unsigned int>(faceMetrics().portBodyExtra);
+        }
+    } else if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
         height = std::max(height, static_cast<unsigned int>(w->height()));
     }
 
@@ -84,7 +101,9 @@ void DefaultHorizontalNodeGeometry::recomputeSize(NodeId const nodeId) const
 
     unsigned int width = inPortWidth + outPortWidth + 4 * _portSpacing;
 
-    if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
+    if (canvasConfig().painted) {
+        width += static_cast<unsigned int>(faceSize.width());
+    } else if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
         width += w->width();
     }
 
@@ -237,6 +256,18 @@ QPointF DefaultHorizontalNodeGeometry::widgetPosition(NodeId const nodeId) const
     unsigned int captionHeight = captionRect(nodeId).height();
     if (_graphModel.nodeData<bool>(nodeId, NodeRole::LabelVisible))
         captionHeight += labelRect(nodeId).height() + _portSpacing / 2;
+
+    // CICADA (ADR-1631): where the rows of a painted node start. A face that
+    // keeps its rows on the port lines sits against the first port line (as a
+    // legacy widget with an expanding policy did); any other is centred.
+    if (canvasConfig().painted) {
+        NodeFaceSource &face = faceOf(_graphModel, nodeId);
+        QSize const body = cachedLayout(face, faceMetrics(), TextMetrics::application()).size;
+        double const x = 2.0 * _portSpacing + maxPortsTextAdvance(nodeId, PortType::In);
+        if (face.alignsToPorts())
+            return QPointF(x, _portSpacing + captionHeight);
+        return QPointF(x, (captionHeight + size.height() - body.height()) / 2.0);
+    }
 
     if (auto w = _graphModel.nodeData<QWidget *>(nodeId, NodeRole::Widget)) {
         // If the widget wants to use as much vertical space as possible,

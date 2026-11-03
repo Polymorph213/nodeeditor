@@ -87,10 +87,6 @@ protected:
 
     void showEvent(QShowEvent *event) override;
 
-    /// CICADA (ADR-1620): after a paint, tells the scene where the view is, so
-    /// that the nodes it shows get their windows and the rest give theirs back.
-    void paintEvent(QPaintEvent *event) override;
-
 protected:
     BasicGraphicsScene *nodeScene();
 

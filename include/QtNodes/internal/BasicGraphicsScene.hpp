@@ -2,6 +2,7 @@
 
 #include "AbstractGraphModel.hpp"
 #include "AbstractNodeGeometry.hpp"
+#include "CanvasConfig.hpp"
 #include "ConnectionIdHash.hpp"
 #include "Definitions.hpp"
 #include "Export.hpp"
@@ -18,11 +19,9 @@
 #include <memory>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 class QUndoStack;
-class QTimer;
-class QWidget;
-class QGraphicsView;
 
 namespace QtNodes {
 
@@ -32,6 +31,7 @@ class AbstractNodePainter;
 class ConnectionGraphicsObject;
 class NodeGraphicsObject;
 class NodeStyle;
+class NodeFaceEditorHost;
 class DeleteCommand;
 class CopyCommand;
 class NodeGroup;
@@ -108,56 +108,84 @@ public:
     /// Deletes all the nodes. Connections are removed automatically.
     void clearScene();
 
+    /// CICADA (ADR-1638): which nodes and wires have an item, as the
+    /// application's CanvasConfig said when the scene was built.
+    ItemPolicy itemPolicy() const { return _itemPolicy; }
+
+    /// CICADA (ADR-1638): the item of a node, made now when the policy made
+    /// none. A caller that is about to touch a node's item (a press on a port,
+    /// a wire drag) asks for it here instead of assuming it exists.
+    /// \param nodeId A node of the model.
+    /// \return The item; nullptr when the node is not in the model.
+    NodeGraphicsObject *ensureNodeItem(NodeId nodeId);
+
+    /// CICADA (ADR-1638): the item of a wire, made now when the policy made
+    /// none.
+    /// \param connectionId A wire of the model.
+    /// \return The item; nullptr when the wire is not in the model.
+    ConnectionGraphicsObject *ensureConnectionItem(ConnectionId connectionId);
+
+    /// CICADA (ADR-1632): who edits the rows of a painted node. The scene does
+    /// not own the host.
+    /// \param host The host; null for none.
+    void setFaceEditorHost(NodeFaceEditorHost *host) { _faceHost = host; }
+
+    /// CICADA (ADR-1632): the editor host, or null.
+    NodeFaceEditorHost *faceEditorHost() const { return _faceHost; }
+
+    /// CICADA (ADR-1638): the selected nodes, by id, in id order. Copy, Cut,
+    /// Delete, Duplicate and CreateGroup read this, never the items, so a
+    /// scene with few or no items acts on every node a person selected.
+    std::vector<NodeId> selectedNodeIds() const;
+
+    /// CICADA (ADR-1638): the selected wires, by id.
+    std::vector<ConnectionId> selectedConnectionIds() const;
+
+    /// CICADA (ADR-1638): the selected groups, by id, in id order.
+    std::vector<GroupId> selectedGroupIds() const;
+
+    /// CICADA (ADR-1638): whether a node is selected.
+    bool isNodeSelected(NodeId nodeId) const;
+
+    /// CICADA (ADR-1638): selects or deselects a node; its item, if it has
+    /// one, follows.
+    void selectNode(NodeId nodeId, bool selected = true);
+
+    /// CICADA (ADR-1638): selects or deselects a wire; its item, if it has
+    /// one, follows.
+    void selectConnection(ConnectionId connectionId, bool selected = true);
+
+    /// CICADA (ADR-1638): selects every node of the model, with or without an
+    /// item.
+    void selectAllNodes();
+
+    /// CICADA (ADR-1638): clears the selection of nodes, wires and groups;
+    /// the items follow.
+    void clearAllSelection();
+
+    /// An item reports a change of its selection state (the selection set
+    /// follows the items; the items follow the set).
+    void noteNodeSelection(NodeId nodeId, bool selected);
+    void noteConnectionSelection(ConnectionId connectionId, bool selected);
+    void noteGroupSelection(GroupId groupId, bool selected);
+
+    /// CICADA (ADR-1638): the group a node belongs to.
+    /// \return The group's id; InvalidGroupId when the node is in none.
+    GroupId groupOfNode(NodeId nodeId) const;
+
+    /// CICADA (ADR-1638): creates a group from node ids; the nodes need no
+    /// item. A scene that makes no items makes no group item either.
+    std::weak_ptr<NodeGroup> createGroupFromIds(std::vector<NodeId> const &nodes,
+                                                QString name = QStringLiteral(""),
+                                                GroupId groupId = InvalidGroupId);
+
     /// CICADA (ADR-1500): whether a view that shows this scene is visible.
     bool hasVisibleView() const;
 
     /// CICADA (ADR-1500): gives every node whose widget waits for a view its
     /// proxy and native window. A view calls it when it is shown; a caller
     /// that renders the scene without a view calls it first.
-    /// CICADA (ADR-1620): with residency on it gives nothing to every node: a
-    /// node draws its widget without a window, and the scene schedules the
-    /// windows of the nodes a view shows (widgetResidency).
     void embedPendingWidgets();
-
-    /// CICADA (ADR-1620): what the live widgets of the nodes come to.
-    struct WidgetResidencyStats
-    {
-        int live = 0;       ///< nodes with a native window now
-        int pending = 0;    ///< nodes that hold a widget without one
-        int cap = 0;        ///< most live nodes
-        double minScale = 0.0; ///< smallest view scale at which a node gets one
-        unsigned long long embeds = 0;       ///< windows made since the scene began
-        unsigned long long releases = 0;     ///< windows given back
-        unsigned long long sizeChanges = 0;  ///< embeds that moved the node's size
-        unsigned long long passes = 0;       ///< residency passes run
-        double lastPassMs = 0.0;             ///< the last pass, wall
-    };
-
-    /// CICADA (ADR-1620): walks the nodes once for the counts.
-    WidgetResidencyStats widgetResidencyStats() const;
-
-    /// CICADA (ADR-1620): runs a residency pass after `delayMs`, or sooner if
-    /// one is waiting already. Called when a node is made, a view is shown, or
-    /// a view's area or scale moved.
-    void scheduleWidgetResidency(int delayMs);
-
-    /// CICADA (ADR-1620): runs the passes the scene has to run now, with no
-    /// time limit, so that the windows are those of the view as it stands.
-    /// A caller that measures or compares calls it after it moved a view.
-    void flushWidgetResidency();
-
-    /// CICADA (ADR-1620): a view painted; schedules a pass when its area or
-    /// scale is not the one the last pass saw.
-    void noteViewPainted(QGraphicsView const *view);
-
-    /// CICADA (ADR-1620): a node gave its widget a window; `sizeChanged` says
-    /// whether that moved the node's size.
-    void noteWidgetEmbedded(bool sizeChanged);
-
-    /// CICADA (ADR-1620): the widget a released node widget is made a child of
-    /// and a top-level widget again, which frees its window and backing store.
-    /// Never shown.
-    QWidget *widgetLimbo();
 
     /**
      * @brief Creates a list of the connections that are incident only to nodes within a
@@ -307,12 +335,6 @@ private:
     /// Redraws adjacent nodes for given `connectionId`
     void updateAttachedNodes(ConnectionId const connectionId, PortType const portType);
 
-    /// CICADA (ADR-1620): one residency pass. Embeds the nodes a view shows,
-    /// nearest to the view's centre first, and releases those it no longer
-    /// shows. Stops after a time limit unless `unlimited`.
-    /// @returns whether there is more to do.
-    bool updateWidgetResidency(bool unlimited);
-
     /**
      * @brief Loads a JSON object that represents a node, with the option
      * to keep the stored node id or generate a new one.
@@ -321,7 +343,7 @@ private:
      * the file; otherwise, a new id will be generated
      * @return A reference to the NodeGraphicsObject related to the loaded node.
      */
-    NodeGraphicsObject &loadNodeToMap(QJsonObject nodeJson, bool keepOriginalId = false);
+    NodeId loadNodeToMap(QJsonObject nodeJson, bool keepOriginalId = false);
 
     /**
      * @brief Loads a connection between nodes from a JSON file.
@@ -377,16 +399,15 @@ private:
     Qt::Orientation _orientation;
     bool _groupingEnabled;
 
-    // CICADA (ADR-1620): live widgets of the nodes.
-    QTimer *_residencyTimer = nullptr;
-    std::unique_ptr<QWidget> _limbo;
-    QRectF _seenViewArea;
-    double _seenViewScale = 0.0;
-    unsigned long long _embeds = 0;
-    unsigned long long _releases = 0;
-    unsigned long long _embedSizeChanges = 0;
-    unsigned long long _residencyPasses = 0;
-    double _lastPassMs = 0.0;
+    // CICADA (ADR-1638): the canvas settings read once, the editor host, the
+    // selection by id and the group of each node by id. None of them needs an
+    // item.
+    ItemPolicy _itemPolicy = ItemPolicy::All;
+    NodeFaceEditorHost *_faceHost = nullptr;
+    std::unordered_set<NodeId> _selectedNodes;
+    std::unordered_set<ConnectionId> _selectedConnections;
+    std::unordered_set<GroupId> _selectedGroups;
+    std::unordered_map<NodeId, GroupId> _groupOfNode;
 };
 
 } // namespace QtNodes

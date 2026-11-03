@@ -42,6 +42,7 @@ enum class NodeProcessingStatus : int {
 };
 
 class StyleCollection;
+class NodeFaceSource;
 
 /**
  * The class wraps Node-specific data operations and propagates it to
@@ -129,6 +130,13 @@ public:
     /// place of the default processing-status icon.
     virtual QPixmap nodeIcon() const { return QPixmap(); }
 
+    /// CICADA (ADR-1642): where the node's icon comes from, when it comes from
+    /// a file. The painter decodes the file once for the process and shares the
+    /// pixmap between every node of the type, so a node holds no decoded image
+    /// of its own (0.52 MB for the Point icon, per instance, before). Empty
+    /// means the node has no icon file: the painter asks nodeIcon().
+    virtual QString nodeIconPath() const { return QString(); }
+
     void setProgressValue(QString new_progress) { _progressValue = new_progress; }
 
 public:
@@ -147,6 +155,13 @@ public:
      * we'll gonna have a dangling pointer.
      */
     virtual QWidget *embeddedWidget() = 0;
+
+    /// CICADA (ADR-1631): the rows this node paints in its body on the painted
+    /// canvas, where it owns no widget. The face belongs to the node and lives
+    /// as long as it does. nullptr (the default) means the node has no face
+    /// yet: it paints one "(not converted)" row. A node with no body returns
+    /// a face of no rows.
+    virtual NodeFaceSource *faceSource() { return nullptr; }
 
     virtual bool resizable() const { return false; }
 

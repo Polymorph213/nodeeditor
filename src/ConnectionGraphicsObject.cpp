@@ -47,6 +47,13 @@ ConnectionGraphicsObject::ConnectionGraphicsObject(BasicGraphicsScene &scene,
     initializePosition();
 }
 
+QVariant ConnectionGraphicsObject::itemChange(GraphicsItemChange change, const QVariant &value)
+{
+    if (change == ItemSelectedHasChanged && scene() && nodeScene())
+        nodeScene()->noteConnectionSelection(_connectionId, value.toBool());
+    return QGraphicsObject::itemChange(change, value);
+}
+
 void ConnectionGraphicsObject::initializePosition()
 {
     // This function is only called when the ConnectionGraphicsObject
@@ -159,13 +166,26 @@ void ConnectionGraphicsObject::move()
 
         NodeGraphicsObject *ngo = nodeScene()->nodeGraphicsObject(nodeId);
 
-        if (ngo) {
+        // CICADA (ADR-1638): a wire can exist while one end has no item: the
+        // port is then where the layout puts it, from the node's position in
+        // the model, not from an item's transform.
+        {
             AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
+
+            QTransform const nodeTransform
+                = ngo ? ngo->sceneTransform()
+                      : QTransform::fromTranslate(
+                          nodeScene()->graphModel().nodeData(nodeId, NodeRole::Position)
+                              .value<QPointF>()
+                              .x(),
+                          nodeScene()->graphModel().nodeData(nodeId, NodeRole::Position)
+                              .value<QPointF>()
+                              .y());
 
             QPointF scenePos = geometry.portScenePosition(nodeId,
                                                           portType,
                                                           getPortIndex(portType, cId),
-                                                          ngo->sceneTransform());
+                                                          nodeTransform);
 
             QPointF connectionPos = sceneTransform().inverted().map(scenePos);
 

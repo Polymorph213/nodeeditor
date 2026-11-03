@@ -11,7 +11,10 @@
 #include <QtWidgets/QWidget>
 
 #include "Export.hpp"
+#include "FaceLayout.hpp"
 #include "NodeState.hpp"
+
+#include <QColor>
 
 class QGraphicsProxyWidget;
 
@@ -79,20 +82,38 @@ public:
     /// (its style sheet, say): the node takes the size the widget now has.
     void pendingWidgetChanged();
 
-    /// CICADA (ADR-1620): whether the node's widget has its proxy, and with it
-    /// a native window, now.
-    bool hasLiveWidget() const { return _proxyWidget != nullptr; }
+    /// CICADA (ADR-1631): whether this node paints its body from rows and owns
+    /// no widget (the canvas is `painted`).
+    bool painted() const { return _painted; }
 
-    /// CICADA (ADR-1620): takes the proxy and the native window away from a
-    /// live widget; the node keeps the widget, draws it from the widget itself
-    /// and gives it a window again when a view needs one. Does nothing, and
-    /// returns false, while the widget is pinned.
-    bool releaseWidget();
+    /// CICADA (ADR-1631): the flat state colour behind the rows (normal,
+    /// hidden, error ...), set by the application as it did the style sheet of
+    /// a legacy node's widget.
+    /// \param color The colour.
+    void setFaceBackground(QColor const &color);
 
-    /// CICADA (ADR-1620): whether a person is using the live widget now (it has
-    /// the scene's focus, holds the mouse, or hosts a pop-up), so that its
-    /// window must stay.
-    bool widgetPinned() const;
+    /// CICADA (ADR-1631): the colour set by setFaceBackground().
+    QColor faceBackground() const { return _faceBackground; }
+
+    /// CICADA (ADR-1631): where the rows are, in item coordinates.
+    /// \return The body rectangle; empty when the node has no rows.
+    QRectF faceRect() const;
+
+    /// CICADA (ADR-1631): what is under a point.
+    /// \param pos In item coordinates.
+    /// \return The row and the part; row -1 outside the rows.
+    FaceHit faceHitAt(QPointF const &pos) const;
+
+    /// CICADA (ADR-1631): the node's rows, their visibility or their values
+    /// changed: the size is measured again, the wires follow and the node is
+    /// repainted. Does nothing for a node that is not painted.
+    void faceChanged();
+
+    /// CICADA (ADR-1631): an editor is open on a row, so the row does not
+    /// paint its text.
+    /// \param row The row; -1 for none.
+    /// \param component The Vec3 component; -1 for none.
+    void setFaceEditing(int row, int component);
 
     /// Saves node in a QJsonObject save file.
     QJsonObject save() const;
@@ -130,6 +151,8 @@ protected:
     void hoverMoveEvent(QGraphicsSceneHoverEvent *) override;
     void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override;
     void contextMenuEvent(QGraphicsSceneContextMenuEvent *event) override;
+    void wheelEvent(QGraphicsSceneWheelEvent *event) override;
+    bool sceneEvent(QEvent *event) override;
 
     // CICADA fix (R1): catch QEvent::Resize on the embedded widget so
     // we re-run recomputeSize + prepareGeometryChange when the widget
@@ -137,21 +160,10 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    /// \param mayDefer Whether the proxy may wait until a view needs it
-    ///        (ADR-1500, ADR-1620). False embeds now.
+    /// \param mayDefer Whether the proxy may wait until a view shows the
+    ///        scene (ADR-1500). False embeds now.
     void embedQWidget(bool mayDefer);
     void setLockedState();
-
-    /// CICADA (ADR-1620): draws the widget of a node that has no proxy, the
-    /// way its proxy would.
-    void paintPendingWidget(QPainter *painter, QStyleOptionGraphicsItem const *option) const;
-
-    /// CICADA (ADR-1620): the widget's place in the node, in node coordinates.
-    QRectF pendingWidgetRect() const;
-
-    /// CICADA (ADR-1620): hands a mouse event on the widget to its proxy, in
-    /// the proxy's own coordinates. Returns whether the proxy accepted it.
-    bool forwardToWidget(QGraphicsSceneMouseEvent *event);
 
 private:
     NodeId _nodeId;
@@ -173,9 +185,16 @@ private:
     // owns it then, so the destructor does.
     QPointer<QWidget> _unembedded;
 
-    // CICADA (ADR-1620): a press on a widget without a proxy gave it one, and
-    // the proxy took the press; the moves and the release that follow go to it.
-    bool _forwardingToWidget = false;
+    // CICADA (ADR-1631): the painted canvas. A painted node has no widget; its
+    // rows are painted over the body and a press on one goes to the scene's
+    // NodeFaceEditorHost.
+    bool _painted = false;
+    bool _faceGrab = false;
+    FaceHit _facePressed;
+    FaceHit _faceHover;
+    QColor _faceBackground = QColor(60, 60, 60);
+    int _editRow = -1;
+    int _editComponent = -1;
 
     std::weak_ptr<NodeGroup> _nodeGroup{};
 };

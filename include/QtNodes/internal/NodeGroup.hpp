@@ -37,7 +37,7 @@ public:
    * @param name Group's name. If none is given, it is automatically generated.
    * @param parent Parent object.
    */
-    NodeGroup(std::vector<NodeGraphicsObject *> nodes,
+    NodeGroup(std::vector<NodeId> nodes,
               GroupId groupId,
               QString name = QString(),
               QObject *parent = nullptr);
@@ -66,9 +66,11 @@ public:
     GroupGraphicsObject const &groupGraphicsObject() const;
 
     /**
-   * @brief Returns the list of nodes that belong to this group.
+   * @brief Returns the items of the nodes that belong to this group and have
+   * one. CICADA (ADR-1638): a group is a list of node ids; a node the scene
+   * made no item for is not in this list, and is in nodeIDs().
    */
-    std::vector<NodeGraphicsObject *> &childNodes();
+    std::vector<NodeGraphicsObject *> childNodes() const;
 
     /**
    * @brief Returns a list of IDs of the nodes that belong to this group.
@@ -91,6 +93,12 @@ public:
     bool empty() const;
 
     /**
+   * @brief Whether a node is in this group.
+   * @param nodeId The node.
+   */
+    bool contains(NodeId nodeId) const;
+
+    /**
    * @brief Returns the number of groups created during the program's execution.
    * Used when automatically naming groups.
    */
@@ -104,10 +112,22 @@ public Q_SLOTS:
     void addNode(QtNodes::NodeGraphicsObject *node);
 
     /**
+   * @brief Adds a node by id; the node needs no item (ADR-1638).
+   * @param nodeId The node.
+   */
+    void addNodeId(NodeId nodeId);
+
+    /**
    * @brief Removes a node from this group.
    * @param node Pointer to the node to be removed.
    */
     void removeNode(QtNodes::NodeGraphicsObject *node);
+
+    /**
+   * @brief Removes a node by id; the node needs no item (ADR-1638).
+   * @param nodeId The node.
+   */
+    void removeNodeId(NodeId nodeId);
 
 private:
     /**
@@ -125,9 +145,9 @@ private:
 
     // data
     /**
-   * @brief List of pointers of nodes that belong to this group.
+   * @brief Ids of the nodes that belong to this group (ADR-1638).
    */
-    std::vector<NodeGraphicsObject *> _childNodes;
+    std::vector<NodeId> _childNodes;
 
     // painting
     /**

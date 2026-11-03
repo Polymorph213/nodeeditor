@@ -12,14 +12,9 @@
 #include "NodeDelegateModel.hpp"
 #include "NodeGraphicsObject.hpp"
 #include "cicada/util/CommandTrace.h" // CICADA: command trace (ADR-1495)
-#include "cicada/util/WidgetResidency.h" // CICADA: live widgets (ADR-1620)
 
 #include <QAccessible> // CICADA: quiet the platform bridge while a node is built
-#include <QApplication>
 #include <QColorDialog> // CICADA group polish: pick group fill color
-#include <QElapsedTimer>
-#include <QGraphicsView>
-#include <QTimer>
 #include <QUndoStack>
 
 #include <QHeaderView>
@@ -41,13 +36,11 @@
 #include <QtCore/QString>
 #include <QtCore/QtGlobal>
 
-#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
 #include <queue>
-#include <vector>
 
 namespace {
 
@@ -187,13 +180,9 @@ BasicGraphicsScene::BasicGraphicsScene(AbstractGraphModel &graphModel, QObject *
 
     connect(&_graphModel, &AbstractGraphModel::modelReset, this, &BasicGraphicsScene::onModelReset);
 
-    // CICADA (ADR-1620): one timer for the residency passes.
-    _residencyTimer = new QTimer(this);
-    _residencyTimer->setSingleShot(true);
-    connect(_residencyTimer, &QTimer::timeout, this, [this]() {
-        if (updateWidgetResidency(false))
-            scheduleWidgetResidency(0);
-    });
+    // CICADA (ADR-1638): which nodes and wires get an item is the
+    // application's choice, read once. A bare scene is policy All.
+    _itemPolicy = canvasConfig().itemPolicy;
 
     traverseGraphAndPopulateGraphicsObjects();
 }
@@ -271,6 +260,8 @@ void BasicGraphicsScene::setGroupingEnabled(bool enabled)
         }
 
         _groups.clear();
+        _groupOfNode.clear();
+        _selectedGroups.clear();
         _nextGroupId = 0;
     }
 
@@ -308,19 +299,155 @@ std::vector<std::shared_ptr<ConnectionId>> BasicGraphicsScene::connectionsWithin
 
     std::vector<std::shared_ptr<ConnectionId>> ret{};
 
-    for (auto const &connection : _connectionGraphicsObjects) {
-        auto outNode = nodeGraphicsObject(connection.first.outNodeId);
-        auto inNode = nodeGraphicsObject(connection.first.inNodeId);
-        if (outNode && inNode) {
-            auto group1 = outNode->nodeGroup().lock();
-            auto group2 = inNode->nodeGroup().lock();
-            if (group1 && group2 && group1->id() == group2->id() && group1->id() == groupID) {
-                ret.push_back(std::make_shared<ConnectionId>(connection.first));
-            }
+    // CICADA (ADR-1638): from the model and the group table, never from the
+    // items that exist: a wire both of whose ends are members of the group.
+    auto const groupIt = _groups.find(groupID);
+    if (groupIt == _groups.end())
+        return ret;
+
+    for (NodeId const member : groupIt->second->nodeIDs()) {
+        for (ConnectionId const &cid : _graphModel.allConnectionIds(member)) {
+            if (cid.outNodeId != member)
+                continue; // each wire once, from its output end
+            if (groupOfNode(cid.inNodeId) == groupID)
+                ret.push_back(std::make_shared<ConnectionId>(cid));
         }
     }
 
     return ret;
+}
+
+NodeGraphicsObject *BasicGraphicsScene::ensureNodeItem(NodeId nodeId)
+{
+    if (NodeGraphicsObject *existing = nodeGraphicsObject(nodeId))
+        return existing;
+    if (!_graphModel.nodeExists(nodeId))
+        return nullptr;
+    AccessibilityEventsPaused const quiet;
+    auto item = std::make_unique<NodeGraphicsObject>(*this, nodeId);
+    NodeGraphicsObject *const raw = item.get();
+    _nodeGraphicsObjects[nodeId] = std::move(item);
+    if (auto const group = groupOfNode(nodeId); group != InvalidGroupId) {
+        auto const it = _groups.find(group);
+        if (it != _groups.end())
+            raw->setNodeGroup(it->second);
+    }
+    if (_selectedNodes.count(nodeId) != 0)
+        raw->setSelected(true);
+    return raw;
+}
+
+ConnectionGraphicsObject *BasicGraphicsScene::ensureConnectionItem(ConnectionId connectionId)
+{
+    if (ConnectionGraphicsObject *existing = connectionGraphicsObject(connectionId))
+        return existing;
+    if (!_graphModel.connectionExists(connectionId))
+        return nullptr;
+    auto item = std::make_unique<ConnectionGraphicsObject>(*this, connectionId);
+    ConnectionGraphicsObject *const raw = item.get();
+    _connectionGraphicsObjects[connectionId] = std::move(item);
+    if (_selectedConnections.count(connectionId) != 0)
+        raw->setSelected(true);
+    return raw;
+}
+
+std::vector<NodeId> BasicGraphicsScene::selectedNodeIds() const
+{
+    std::vector<NodeId> ids(_selectedNodes.begin(), _selectedNodes.end());
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+std::vector<ConnectionId> BasicGraphicsScene::selectedConnectionIds() const
+{
+    return std::vector<ConnectionId>(_selectedConnections.begin(), _selectedConnections.end());
+}
+
+std::vector<GroupId> BasicGraphicsScene::selectedGroupIds() const
+{
+    std::vector<GroupId> ids(_selectedGroups.begin(), _selectedGroups.end());
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+bool BasicGraphicsScene::isNodeSelected(NodeId nodeId) const
+{
+    return _selectedNodes.count(nodeId) != 0;
+}
+
+void BasicGraphicsScene::selectNode(NodeId nodeId, bool selected)
+{
+    if (selected) {
+        if (!_graphModel.nodeExists(nodeId))
+            return;
+        _selectedNodes.insert(nodeId);
+    } else {
+        _selectedNodes.erase(nodeId);
+    }
+    if (NodeGraphicsObject *item = nodeGraphicsObject(nodeId)) {
+        if (item->isSelected() != selected)
+            item->setSelected(selected);
+    }
+}
+
+void BasicGraphicsScene::selectConnection(ConnectionId connectionId, bool selected)
+{
+    if (selected) {
+        if (!_graphModel.connectionExists(connectionId))
+            return;
+        _selectedConnections.insert(connectionId);
+    } else {
+        _selectedConnections.erase(connectionId);
+    }
+    if (ConnectionGraphicsObject *item = connectionGraphicsObject(connectionId)) {
+        if (item->isSelected() != selected)
+            item->setSelected(selected);
+    }
+}
+
+void BasicGraphicsScene::selectAllNodes()
+{
+    for (NodeId const nodeId : _graphModel.allNodeIds())
+        selectNode(nodeId, true);
+}
+
+void BasicGraphicsScene::clearAllSelection()
+{
+    // The items first: each reports its own deselection through itemChange.
+    clearSelection();
+    _selectedNodes.clear();
+    _selectedConnections.clear();
+    _selectedGroups.clear();
+}
+
+void BasicGraphicsScene::noteNodeSelection(NodeId nodeId, bool selected)
+{
+    if (selected)
+        _selectedNodes.insert(nodeId);
+    else
+        _selectedNodes.erase(nodeId);
+}
+
+void BasicGraphicsScene::noteConnectionSelection(ConnectionId connectionId, bool selected)
+{
+    if (selected)
+        _selectedConnections.insert(connectionId);
+    else
+        _selectedConnections.erase(connectionId);
+}
+
+void BasicGraphicsScene::noteGroupSelection(GroupId groupId, bool selected)
+{
+    if (selected)
+        _selectedGroups.insert(groupId);
+    else
+        _selectedGroups.erase(groupId);
+}
+
+GroupId BasicGraphicsScene::groupOfNode(NodeId nodeId) const
+{
+    auto const it = _groupOfNode.find(nodeId);
+    return it == _groupOfNode.end() ? InvalidGroupId : it->second;
 }
 
 NodeGraphicsObject *BasicGraphicsScene::nodeGraphicsObject(NodeId nodeId)
@@ -372,6 +499,10 @@ QMenu *BasicGraphicsScene::createSceneMenu(QPointF const scenePos)
 
 void BasicGraphicsScene::traverseGraphAndPopulateGraphicsObjects()
 {
+    // CICADA (ADR-1638): policy None makes no item, for nodes or for wires.
+    if (_itemPolicy == ItemPolicy::None)
+        return;
+
     auto allNodeIds = _graphModel.allNodeIds();
 
     // First create all the nodes. Their widgets are built here, which is not
@@ -394,8 +525,6 @@ void BasicGraphicsScene::traverseGraphAndPopulateGraphicsObjects()
             }
         }
     }
-
-    scheduleWidgetResidency(0);
 }
 
 void BasicGraphicsScene::updateAttachedNodes(ConnectionId const connectionId,
@@ -414,6 +543,7 @@ void BasicGraphicsScene::onConnectionDeleted(ConnectionId const connectionId)
     if (it != _connectionGraphicsObjects.end()) {
         _connectionGraphicsObjects.erase(it);
     }
+    _selectedConnections.erase(connectionId);
 
     // TODO: do we need it?
     if (_draftConnection && _draftConnection->connectionId() == connectionId) {
@@ -429,8 +559,10 @@ void BasicGraphicsScene::onConnectionDeleted(ConnectionId const connectionId)
 void BasicGraphicsScene::onConnectionCreated(ConnectionId const connectionId)
 {
     CICADA_TRACE_AS(Ui, "QtNodes.sceneConnectionCreated");
-    _connectionGraphicsObjects[connectionId]
-        = std::make_unique<ConnectionGraphicsObject>(*this, connectionId);
+    if (_itemPolicy != ItemPolicy::None) {
+        _connectionGraphicsObjects[connectionId]
+            = std::make_unique<ConnectionGraphicsObject>(*this, connectionId);
+    }
 
     updateAttachedNodes(connectionId, PortType::Out);
     updateAttachedNodes(connectionId, PortType::In);
@@ -440,9 +572,13 @@ void BasicGraphicsScene::onConnectionCreated(ConnectionId const connectionId)
 
 void BasicGraphicsScene::onNodeDeleted(NodeId const nodeId)
 {
+    // CICADA (ADR-1638): the group table and the selection are by id, so a
+    // node leaves them whether or not it had an item.
+    removeNodeFromGroup(nodeId);
+    _selectedNodes.erase(nodeId);
+
     auto it = _nodeGraphicsObjects.find(nodeId);
     if (it != _nodeGraphicsObjects.end()) {
-        removeNodeFromGroup(nodeId);
         _nodeGraphicsObjects.erase(it);
 
         Q_EMIT modified(this);
@@ -452,14 +588,18 @@ void BasicGraphicsScene::onNodeDeleted(NodeId const nodeId)
 void BasicGraphicsScene::onNodeCreated(NodeId const nodeId)
 {
     CICADA_TRACE_AS(Ui, "QtNodes.sceneNodeCreated");
+    if (_itemPolicy == ItemPolicy::None) {
+        // No item. The size is still the layout's (the wires that reach the
+        // node, and a canvas that opens later, read it).
+        if (canvasConfig().painted)
+            _nodeGeometry->recomputeSize(nodeId);
+        Q_EMIT modified(this);
+        return;
+    }
     {
         AccessibilityEventsPaused const quiet;
         _nodeGraphicsObjects[nodeId] = std::make_unique<NodeGraphicsObject>(*this, nodeId);
     }
-
-    // CICADA (ADR-1620): after the command or the load that made it, so that
-    // a hundred nodes made together are one pass.
-    scheduleWidgetResidency(0);
 
     Q_EMIT modified(this);
 }
@@ -485,217 +625,17 @@ bool BasicGraphicsScene::hasVisibleView() const
 
 void BasicGraphicsScene::embedPendingWidgets()
 {
-    // CICADA (ADR-1620): a window for every node is the wall of ADR-1519, and
-    // a node draws its widget without one. The view that is shown, and the
-    // render of the scene, need none: the passes give windows to the nodes a
-    // person can use.
-    if (cicada::widgetresidency::enabled()) {
-        scheduleWidgetResidency(0);
-        return;
-    }
     for (auto &entry : _nodeGraphicsObjects)
         entry.second->embedPendingWidget();
-}
-
-QWidget *BasicGraphicsScene::widgetLimbo()
-{
-    if (!_limbo)
-        _limbo = std::make_unique<QWidget>();
-    return _limbo.get();
-}
-
-void BasicGraphicsScene::noteWidgetEmbedded(bool sizeChanged)
-{
-    ++_embeds;
-    if (sizeChanged)
-        ++_embedSizeChanges;
-}
-
-BasicGraphicsScene::WidgetResidencyStats BasicGraphicsScene::widgetResidencyStats() const
-{
-    WidgetResidencyStats stats;
-    for (auto const &entry : _nodeGraphicsObjects) {
-        if (entry.second->hasLiveWidget())
-            ++stats.live;
-        else if (entry.second->hasPendingWidget())
-            ++stats.pending;
-    }
-    stats.cap = cicada::widgetresidency::liveCap();
-    stats.minScale = cicada::widgetresidency::minScale();
-    stats.embeds = _embeds;
-    stats.releases = _releases;
-    stats.sizeChanges = _embedSizeChanges;
-    stats.passes = _residencyPasses;
-    stats.lastPassMs = _lastPassMs;
-    return stats;
-}
-
-void BasicGraphicsScene::scheduleWidgetResidency(int delayMs)
-{
-    if (!cicada::widgetresidency::enabled() || _residencyTimer == nullptr)
-        return;
-    if (!_residencyTimer->isActive() || _residencyTimer->remainingTime() > delayMs)
-        _residencyTimer->start(delayMs);
-}
-
-void BasicGraphicsScene::flushWidgetResidency()
-{
-    if (!cicada::widgetresidency::enabled())
-        return;
-    if (_residencyTimer != nullptr)
-        _residencyTimer->stop();
-    while (updateWidgetResidency(true)) {
-    }
-}
-
-void BasicGraphicsScene::noteViewPainted(QGraphicsView const *view)
-{
-    if (!cicada::widgetresidency::enabled() || view == nullptr)
-        return;
-    QRectF const area = view->mapToScene(view->viewport()->rect()).boundingRect();
-    double const scale = view->transform().m11();
-    if (area == _seenViewArea && scale == _seenViewScale)
-        return;
-    _seenViewArea = area;
-    _seenViewScale = scale;
-    // A pan or a zoom is a stream of paints: the first starts a pass, the
-    // rest find it waiting. The nodes that came into view are drawn from their
-    // widgets until it gets to them.
-    scheduleWidgetResidency(60);
-}
-
-bool BasicGraphicsScene::updateWidgetResidency(bool unlimited)
-{
-    if (!cicada::widgetresidency::enabled())
-        return false;
-    // A combo box's list is a pop-up of the widget a node holds: no window is
-    // taken away or made under it.
-    if (QApplication::activePopupWidget() != nullptr) {
-        scheduleWidgetResidency(250);
-        return false;
-    }
-
-    CICADA_TRACE_AS(Ui, "QtNodes.widgetResidency");
-    QElapsedTimer clock;
-    clock.start();
-    ++_residencyPasses;
-
-    // What the views show: the area a node is made live in (the view and a
-    // quarter of it more on each side, so a pan finds them ready), and the
-    // larger one it keeps its window in (a node does not flicker at an edge).
-    QRectF embedArea;
-    QRectF keepArea;
-    QPointF centre;
-    bool shown = false;
-    bool readable = false;
-    for (QGraphicsView const *view : views()) {
-        if (!view->isVisible())
-            continue;
-        QRectF const seen = view->mapToScene(view->viewport()->rect()).boundingRect();
-        double const w = seen.width();
-        double const h = seen.height();
-        embedArea = embedArea.united(seen.adjusted(-0.25 * w, -0.25 * h, 0.25 * w, 0.25 * h));
-        keepArea = keepArea.united(seen.adjusted(-1.0 * w, -1.0 * h, 1.0 * w, 1.0 * h));
-        if (!shown)
-            centre = seen.center();
-        shown = true;
-        readable = readable || view->transform().m11() >= cicada::widgetresidency::minScale();
-    }
-    if (!shown) {
-        _lastPassMs = clock.nsecsElapsed() / 1.0e6;
-        return false;
-    }
-
-    struct Candidate
-    {
-        double distance;
-        NodeGraphicsObject *node;
-        bool live;
-    };
-    std::vector<Candidate> wanted;
-    int pinned = 0;
-    for (auto const &entry : _nodeGraphicsObjects) {
-        NodeGraphicsObject *const node = entry.second.get();
-        if (node->hasLiveWidget()) {
-            if (node->widgetPinned()) {
-                ++pinned;
-                continue;
-            }
-            QRectF const r = node->sceneBoundingRect();
-            if (r.intersects(keepArea)) {
-                QPointF const d = r.center() - centre;
-                wanted.push_back({d.x() * d.x() + d.y() * d.y(), node, true});
-            } else {
-                wanted.push_back({-1.0, node, true}); // out of the keep area
-            }
-        } else if (readable && node->hasPendingWidget()) {
-            QRectF const r = node->sceneBoundingRect();
-            if (r.intersects(embedArea)) {
-                QPointF const d = r.center() - centre;
-                wanted.push_back({d.x() * d.x() + d.y() * d.y(), node, false});
-            }
-        }
-    }
-
-    // The nearest to the centre keep or get a window, up to the cap; a live
-    // node outside the keep area never does.
-    std::sort(wanted.begin(), wanted.end(), [](Candidate const &a, Candidate const &b) {
-        bool const aOut = a.distance < 0.0;
-        bool const bOut = b.distance < 0.0;
-        if (aOut != bOut)
-            return bOut;
-        return a.distance < b.distance;
-    });
-    int const room = std::max(0, cicada::widgetresidency::liveCap() - pinned);
-    std::vector<NodeGraphicsObject *> release;
-    std::vector<NodeGraphicsObject *> embed;
-    int taken = 0;
-    for (Candidate const &c : wanted) {
-        bool const out = c.distance < 0.0;
-        if (!out && taken < room) {
-            ++taken;
-            if (!c.live)
-                embed.push_back(c.node);
-        } else if (c.live) {
-            release.push_back(c.node);
-        }
-    }
-
-    // Windows given back first, so the process never holds more than the cap
-    // and what is pinned. The pass stops at its time limit and asks for
-    // another: input and paints get their turn between.
-    constexpr double kPassBudgetMs = 30.0;
-    bool more = false;
-    QElapsedTimer work; // the limit counts what is done, not what was planned
-    work.start();
-    int done = 0;
-    for (NodeGraphicsObject *node : release) {
-        if (!unlimited && done > 0 && work.nsecsElapsed() / 1.0e6 > kPassBudgetMs) {
-            more = true;
-            break;
-        }
-        if (node->releaseWidget()) {
-            ++_releases;
-            ++done;
-        }
-    }
-    if (!more) {
-        for (NodeGraphicsObject *node : embed) {
-            if (!unlimited && done > 0 && work.nsecsElapsed() / 1.0e6 > kPassBudgetMs) {
-                more = true;
-                break;
-            }
-            node->embedPendingWidget();
-            ++done;
-        }
-    }
-    _lastPassMs = clock.nsecsElapsed() / 1.0e6;
-    return more;
 }
 
 void BasicGraphicsScene::onNodeUpdated(NodeId const nodeId)
 {
     auto node = nodeGraphicsObject(nodeId);
+
+    // CICADA (ADR-1638): a node with no item still has its size.
+    if (!node && canvasConfig().painted && _graphModel.nodeExists(nodeId))
+        _nodeGeometry->recomputeSize(nodeId);
 
     if (node) {
         node->setGeometryChanged();
@@ -730,6 +670,10 @@ void BasicGraphicsScene::onModelReset()
 {
     _connectionGraphicsObjects.clear();
     _nodeGraphicsObjects.clear();
+    _selectedNodes.clear();
+    _selectedConnections.clear();
+    _selectedGroups.clear();
+    _groupOfNode.clear();
 
     clear();
 
@@ -738,26 +682,25 @@ void BasicGraphicsScene::onModelReset()
 
 void BasicGraphicsScene::freezeModelAndConnections(bool isFreeze)
 {
-    for (QGraphicsItem *item : selectedItems()) {
-        if (auto n = qgraphicsitem_cast<NodeGraphicsObject *>(item)) {
-            int portCount = graphModel().nodeData(n->nodeId(), NodeRole::OutPortCount).toInt();
-            for (int i = 0; i < portCount; i++) {
-                auto graphConnections = graphModel().connections(n->nodeId(),
-                                                                 QtNodes::PortType::Out,
-                                                                 QtNodes::PortIndex(i));
+    // CICADA (ADR-1638): the selected nodes by id, not by the items that exist.
+    for (NodeId const nodeId : selectedNodeIds()) {
+        int portCount = graphModel().nodeData(nodeId, NodeRole::OutPortCount).toInt();
+        for (int i = 0; i < portCount; i++) {
+            auto graphConnections = graphModel().connections(nodeId,
+                                                             QtNodes::PortType::Out,
+                                                             QtNodes::PortIndex(i));
 
-                for (auto const &c : graphConnections) {
-                    if (auto *cgo = connectionGraphicsObject(c)) {
-                        cgo->connectionState().setFrozen(isFreeze);
-                        cgo->update();
-                    }
+            for (auto const &c : graphConnections) {
+                if (auto *cgo = connectionGraphicsObject(c)) {
+                    cgo->connectionState().setFrozen(isFreeze);
+                    cgo->update();
                 }
             }
+        }
 
-            if (auto *dfModel = dynamic_cast<DataFlowGraphModel *>(&graphModel())) {
-                if (auto *delegate = dfModel->delegateModel<NodeDelegateModel>(n->nodeId())) {
-                    delegate->setFrozenState(isFreeze);
-                }
+        if (auto *dfModel = dynamic_cast<DataFlowGraphModel *>(&graphModel())) {
+            if (auto *delegate = dfModel->delegateModel<NodeDelegateModel>(nodeId)) {
+                delegate->setFrozenState(isFreeze);
             }
         }
     }
@@ -767,15 +710,28 @@ std::weak_ptr<NodeGroup> BasicGraphicsScene::createGroup(std::vector<NodeGraphic
                                                          QString groupName,
                                                          GroupId groupId)
 {
+    std::vector<NodeId> ids;
+    ids.reserve(nodes.size());
+    for (auto *node : nodes) {
+        if (node)
+            ids.push_back(node->nodeId());
+    }
+    return createGroupFromIds(ids, std::move(groupName), groupId);
+}
+
+std::weak_ptr<NodeGroup> BasicGraphicsScene::createGroupFromIds(std::vector<NodeId> const &nodes,
+                                                                QString groupName,
+                                                                GroupId groupId)
+{
     if (!_groupingEnabled)
         return std::weak_ptr<NodeGroup>();
 
     if (nodes.empty())
         return std::weak_ptr<NodeGroup>();
 
-    for (auto *node : nodes) {
-        if (!node->nodeGroup().expired())
-            removeNodeFromGroup(node->nodeId());
+    for (NodeId const nodeId : nodes) {
+        if (groupOfNode(nodeId) != InvalidGroupId)
+            removeNodeFromGroup(nodeId);
     }
 
     if (groupName.isEmpty()) {
@@ -795,14 +751,16 @@ std::weak_ptr<NodeGroup> BasicGraphicsScene::createGroup(std::vector<NodeGraphic
     }
 
     auto group = std::make_shared<NodeGroup>(nodes, groupId, groupName, this);
-    auto ggo = std::make_unique<GroupGraphicsObject>(*this, *group);
+    // CICADA (ADR-1638): a scene that makes no items makes no group item.
+    if (_itemPolicy != ItemPolicy::None) {
+        auto ggo = std::make_unique<GroupGraphicsObject>(*this, *group);
+        group->setGraphicsObject(std::move(ggo));
+    }
 
-    group->setGraphicsObject(std::move(ggo));
-
-    for (auto &nodePtr : nodes) {
-        auto node = _nodeGraphicsObjects[nodePtr->nodeId()].get();
-
-        node->setNodeGroup(group);
+    for (NodeId const nodeId : nodes) {
+        _groupOfNode[nodeId] = group->id();
+        if (NodeGraphicsObject *node = nodeGraphicsObject(nodeId))
+            node->setNodeGroup(group);
     }
 
     std::weak_ptr<NodeGroup> groupWeakPtr = group;
@@ -814,17 +772,15 @@ std::weak_ptr<NodeGroup> BasicGraphicsScene::createGroup(std::vector<NodeGraphic
 
 std::vector<NodeGraphicsObject *> BasicGraphicsScene::selectedNodes() const
 {
-    QList<QGraphicsItem *> graphicsItems = selectedItems();
-
+    // CICADA (ADR-1638): the items of the selected nodes that have one. A
+    // caller that acts on the selection reads selectedNodeIds().
     std::vector<NodeGraphicsObject *> result;
-    result.reserve(graphicsItems.size());
+    result.reserve(_selectedNodes.size());
 
-    for (QGraphicsItem *item : graphicsItems) {
-        auto ngo = qgraphicsitem_cast<NodeGraphicsObject *>(item);
-
-        if (ngo) {
-            result.push_back(ngo);
-        }
+    for (NodeId const nodeId : selectedNodeIds()) {
+        auto const it = _nodeGraphicsObjects.find(nodeId);
+        if (it != _nodeGraphicsObjects.end())
+            result.push_back(it->second.get());
     }
 
     return result;
@@ -856,15 +812,16 @@ void BasicGraphicsScene::addNodeToGroup(NodeId nodeId, GroupId groupId)
     if (!_groupingEnabled)
         return;
 
+    // CICADA (ADR-1638): by id; the node needs no item.
     auto groupIt = _groups.find(groupId);
-    auto nodeIt = _nodeGraphicsObjects.find(nodeId);
-    if (groupIt == _groups.end() || nodeIt == _nodeGraphicsObjects.end())
+    if (groupIt == _groups.end() || !_graphModel.nodeExists(nodeId))
         return;
 
     auto group = groupIt->second;
-    auto node = nodeIt->second.get();
-    group->addNode(node);
-    node->setNodeGroup(group);
+    group->addNodeId(nodeId);
+    _groupOfNode[nodeId] = groupId;
+    if (NodeGraphicsObject *node = nodeGraphicsObject(nodeId))
+        node->setNodeGroup(group);
 }
 
 void BasicGraphicsScene::removeNodeFromGroup(NodeId nodeId)
@@ -872,19 +829,24 @@ void BasicGraphicsScene::removeNodeFromGroup(NodeId nodeId)
     if (!_groupingEnabled)
         return;
 
-    auto nodeIt = _nodeGraphicsObjects.find(nodeId);
-    if (nodeIt == _nodeGraphicsObjects.end())
+    auto const where = _groupOfNode.find(nodeId);
+    if (where == _groupOfNode.end())
         return;
 
-    auto group = nodeIt->second->nodeGroup().lock();
-    if (group) {
-        group->removeNode(nodeIt->second.get());
+    auto const groupIt = _groups.find(where->second);
+    _groupOfNode.erase(where);
+    if (groupIt != _groups.end()) {
+        std::shared_ptr<NodeGroup> const group = groupIt->second;
+        group->removeNodeId(nodeId);
         if (group->empty()) {
+            _selectedGroups.erase(group->id());
             _groups.erase(group->id());
         }
     }
-    nodeIt->second->unsetNodeGroup();
-    nodeIt->second->lock(false);
+    if (NodeGraphicsObject *node = nodeGraphicsObject(nodeId)) {
+        node->unsetNodeGroup();
+        node->lock(false);
+    }
 }
 
 std::weak_ptr<QtNodes::NodeGroup> BasicGraphicsScene::createGroupFromSelection(QString groupName)
@@ -892,11 +854,12 @@ std::weak_ptr<QtNodes::NodeGroup> BasicGraphicsScene::createGroupFromSelection(Q
     if (!_groupingEnabled)
         return std::weak_ptr<NodeGroup>();
 
-    auto nodes = selectedNodes();
-    return createGroup(nodes, groupName);
+    // CICADA (ADR-1638): the selected nodes by id; a select-all groups every
+    // node, not the ones that have an item.
+    return createGroupFromIds(selectedNodeIds(), groupName);
 }
 
-NodeGraphicsObject &BasicGraphicsScene::loadNodeToMap(QJsonObject nodeJson, bool keepOriginalId)
+NodeId BasicGraphicsScene::loadNodeToMap(QJsonObject nodeJson, bool keepOriginalId)
 {
     NodeId newNodeId = InvalidNodeId;
 
@@ -911,14 +874,11 @@ NodeGraphicsObject &BasicGraphicsScene::loadNodeToMap(QJsonObject nodeJson, bool
 
     _graphModel.loadNode(nodeJson);
 
-    auto *nodeObject = nodeGraphicsObject(newNodeId);
-    if (!nodeObject) {
-        auto graphicsObject = std::make_unique<NodeGraphicsObject>(*this, newNodeId);
-        nodeObject = graphicsObject.get();
-        _nodeGraphicsObjects[newNodeId] = std::move(graphicsObject);
-    }
+    // CICADA (ADR-1638): an item only where the policy makes one.
+    if (_itemPolicy != ItemPolicy::None && !nodeGraphicsObject(newNodeId))
+        ensureNodeItem(newNodeId);
 
-    return *nodeObject;
+    return newNodeId;
 }
 
 void BasicGraphicsScene::loadConnectionToMap(QJsonObject const &connectionJson,
@@ -956,22 +916,21 @@ BasicGraphicsScene::restoreGroup(QJsonObject const &groupJson)
     std::unordered_map<GroupId, GroupId> IDsMap{};
     std::unordered_map<NodeId, NodeId> nodeIdMap{};
 
-    std::vector<NodeGraphicsObject *> group_children{};
+    std::vector<NodeId> group_children{};
 
     QJsonArray nodesJson = groupJson["nodes"].toArray();
     for (const QJsonValueRef nodeJson : nodesJson) {
         QJsonObject nodeObject = nodeJson.toObject();
         NodeId const oldNodeId = jsonValueToNodeId(nodeObject["id"]);
 
-        NodeGraphicsObject &nodeRef = loadNodeToMap(nodeObject, false);
-        NodeId const newNodeId = nodeRef.nodeId();
+        NodeId const newNodeId = loadNodeToMap(nodeObject, false);
 
         if (oldNodeId != InvalidNodeId) {
             nodeIdMap.emplace(oldNodeId, newNodeId);
             IDsMap.emplace(static_cast<GroupId>(oldNodeId), static_cast<GroupId>(newNodeId));
         }
 
-        group_children.push_back(&nodeRef);
+        group_children.push_back(newNodeId);
     }
 
     QJsonArray connectionJsonArray = groupJson["connections"].toArray();
@@ -979,7 +938,7 @@ BasicGraphicsScene::restoreGroup(QJsonObject const &groupJson)
         loadConnectionToMap(connection.toObject(), nodeIdMap);
     }
 
-    return std::make_pair(createGroup(group_children, groupJson["name"].toString()), IDsMap);
+    return std::make_pair(createGroupFromIds(group_children, groupJson["name"].toString()), IDsMap);
 }
 
 std::unordered_map<GroupId, std::shared_ptr<NodeGroup>> const &BasicGraphicsScene::groups() const
