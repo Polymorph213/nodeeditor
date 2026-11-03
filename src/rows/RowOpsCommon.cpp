@@ -108,8 +108,7 @@ void paintRowLabel(const RowPaintArgs &args) {
   paintCell(args.painter, args.geometry.label, args.state.background);
   paintCellText(args.painter, args.geometry.label,
                 args.spec.label + QLatin1Char(':'),
-                Qt::AlignVCenter | Qt::AlignHCenter,
-                faceTextColor(args.enabled));
+                Qt::AlignVCenter | Qt::AlignLeft, faceTextColor(args.enabled));
 }
 
 QRect inlineFieldRect(const FaceMetrics &metrics, const QRect &cell) {

@@ -361,8 +361,8 @@ FaceLayoutResult layoutFace(const NodeFaceSource &face,
     geo.row = QRect(x, y, width, head.height);
     if (head.twoColumn) {
       const int labelColumn = columns[head.section].label;
-      geo.label = QRect(x + labelColumn - head.labelWidth, y, head.labelWidth,
-                        head.height);
+      // The label column, its text from the left as a form's was (ADR-1851).
+      geo.label = QRect(x, y, labelColumn, head.height);
       int fieldX = x + labelColumn + metrics.columnSpacing;
       int fieldWidth = std::max(0, x + width - fieldX);
       // A field of a width the node fixed sits at the right of the line, as
