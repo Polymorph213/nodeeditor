@@ -176,6 +176,32 @@ private:
     void embedQWidget(bool mayDefer);
     void setLockedState();
 
+    /// CICADA (ADR-1958): a resize of the node by its handle or a side.
+    ///
+    /// The pointer's travel is counted from the press, never from the last
+    /// move, and the body's size is the one it had at the press plus that
+    /// travel: nothing is rounded away and a size the node refuses does not
+    /// leave the handle behind. Only the right and bottom sides move; the
+    /// frame's top-left corner is the node's position and stays where it is.
+    struct ResizeGrab
+    {
+        bool right = false;  ///< the right side follows the pointer
+        bool bottom = false; ///< the bottom side follows the pointer
+        QPointF press;       ///< the press, in item coordinates
+        QSize start;         ///< the size of the body (the widget) at the press
+        bool any() const { return right || bottom; }
+    };
+
+    /// CICADA (ADR-1958): the sides a press at \p pos resizes: both at the
+    /// handle, one at the right or the bottom strip (painted canvas only).
+    /// None when the node is not resizable, its face has no body to resize, or
+    /// the press belongs to a port.
+    /// \param pos In item coordinates.
+    ResizeGrab resizeGrabAt(QPointF const &pos) const;
+
+    /// CICADA (ADR-1958): the body size the pointer at \p pos asks for.
+    QSize resizedTo(QPointF const &pos) const;
+
 private:
     NodeId _nodeId;
 
@@ -201,6 +227,7 @@ private:
     // NodeFaceEditorHost.
     bool _painted = false;
     bool _faceGrab = false;
+    ResizeGrab _resize; // CICADA (ADR-1958): the resize in progress, if any
     FaceHit _facePressed;
     FaceHit _faceHover;
     QColor _faceBackground = QColor(60, 60, 60);

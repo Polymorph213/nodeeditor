@@ -66,6 +66,12 @@ protected:
 /// handled; consumed by the host app's context-menu filter.
 static bool s_pendingValidationRightClick = false;
 
+/// CICADA (ADR-1958): how far inside the frame's right and bottom edges a
+/// press takes that side for a resize, and how far beyond it (where the edge
+/// is drawn).
+constexpr double kResizeSidePx = 6.0;
+constexpr double kResizeReachPx = 3.0;
+
 } // namespace
 
 bool NodeGraphicsObject::consumePendingValidationRightClick()
@@ -436,6 +442,54 @@ void NodeGraphicsObject::faceChanged()
         moveConnections();
 }
 
+NodeGraphicsObject::ResizeGrab NodeGraphicsObject::resizeGrabAt(QPointF const &pos) const
+{
+    ResizeGrab grab;
+    if (!(_graphModel.nodeFlags(_nodeId) & NodeFlag::Resizable))
+        return grab;
+    // A painted node resizes its face's body; one with no rows has none.
+    if (_painted && faceRect().isEmpty())
+        return grab;
+
+    AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
+    if (QRectF(geometry.resizeHandleRect(_nodeId)).contains(pos)) {
+        grab.right = true;
+        grab.bottom = true;
+        grab.press = pos;
+        return grab;
+    }
+    // The sides are the painted canvas's: the legacy widget has strips of its
+    // own. A press on a port is the port's.
+    if (!_painted)
+        return grab;
+    for (PortType const type : {PortType::In, PortType::Out}) {
+        if (geometry.checkPortHit(_nodeId, type, pos) != InvalidPortIndex)
+            return grab;
+    }
+    QSize const frame = geometry.size(_nodeId);
+    double const w = frame.width();
+    double const h = frame.height();
+    bool const alongRight = pos.x() >= (w - kResizeSidePx) && pos.x() < (w + kResizeReachPx);
+    bool const alongBottom = pos.y() >= (h - kResizeSidePx) && pos.y() < (h + kResizeReachPx);
+    bool const withinWidth = pos.x() >= 0.0 && pos.x() < (w + kResizeReachPx);
+    bool const withinHeight = pos.y() >= 0.0 && pos.y() < (h + kResizeReachPx);
+    grab.right = alongRight && withinHeight;
+    grab.bottom = alongBottom && withinWidth;
+    grab.press = pos;
+    return grab;
+}
+
+QSize NodeGraphicsObject::resizedTo(QPointF const &pos) const
+{
+    QPointF const travel = pos - _resize.press;
+    QSize size = _resize.start;
+    if (_resize.right)
+        size.rwidth() += qRound(travel.x());
+    if (_resize.bottom)
+        size.rheight() += qRound(travel.y());
+    return size;
+}
+
 void NodeGraphicsObject::setFaceEditing(int row, int component)
 {
     if (_editRow == row && _editComponent == component)
@@ -655,9 +709,17 @@ void NodeGraphicsObject::mousePressEvent(QGraphicsSceneMouseEvent *event)
     }
 
     if (_graphModel.nodeFlags(_nodeId) & NodeFlag::Resizable) {
-        auto pos = event->pos();
-        bool const hit = geometry.resizeHandleRect(_nodeId).contains(QPoint(pos.x(), pos.y()));
-        _nodeState.setResizing(hit);
+        // CICADA (ADR-1958): a press on the handle or on a side takes the
+        // resize, and the size it starts from.
+        _resize = resizeGrabAt(event->pos());
+        if (_resize.any()) {
+            if (_painted) {
+                _resize.start = faceRect().size().toSize();
+            } else if (auto w = _graphModel.nodeData<QWidget *>(_nodeId, NodeRole::Widget)) {
+                _resize.start = w->size();
+            }
+        }
+        _nodeState.setResizing(_resize.any());
     }
 
     QGraphicsObject::mousePressEvent(event);
@@ -688,30 +750,22 @@ void NodeGraphicsObject::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
     }
 
     if (_nodeState.resizing() && _painted) {
-        // CICADA (ADR-1804): a face with a body of its own takes the size
-        // the handle asks for (the Panel); the node then follows its rows.
+        // CICADA (ADR-1804, ADR-1958): a face with a body of its own takes the
+        // size the pointer asks for (the Panel); the node then follows its
+        // rows. The drag is the resize's whatever the face answers: a size it
+        // refuses (its least, its greatest) or a move that changes nothing
+        // never falls through to a drag of the node, which was the report "the
+        // Panel moves its location when scaling it".
         NodeFaceSource &face = faceOf(_graphModel, _nodeId);
-        auto const diff = event->pos() - event->lastPos();
-        QSize const next = faceRect().size().toSize()
-                           + QSize(static_cast<int>(diff.x()), static_cast<int>(diff.y()));
-        if (face.resizeBody(next, false)) {
+        if (face.resizeBody(resizedTo(event->pos()), false))
             faceChanged();
-            event->accept();
-        } else {
-            // A face with no body of its own: the handle drags the node.
-            QGraphicsObject::mouseMoveEvent(event);
-        }
+        event->accept();
     } else if (_nodeState.resizing() && !_painted) {
-        auto diff = event->pos() - event->lastPos();
-
         if (auto w = _graphModel.nodeData<QWidget *>(_nodeId, NodeRole::Widget)) {
             prepareGeometryChange();
 
-            auto oldSize = w->size();
-
-            oldSize += QSize(diff.x(), diff.y());
-
-            w->resize(oldSize);
+            // CICADA (ADR-1958): counted from the press, as the painted canvas.
+            w->resize(resizedTo(event->pos()));
 
             AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
 
@@ -800,10 +854,14 @@ void NodeGraphicsObject::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
     }
 
     if (_painted && _nodeState.resizing()) {
-        if (faceOf(_graphModel, _nodeId).resizeBody(faceRect().size().toSize(), true))
+        // CICADA (ADR-1958): the size the drag ended on, from the same press
+        // as every move, so the release records what is on screen and moves
+        // nothing.
+        if (faceOf(_graphModel, _nodeId).resizeBody(resizedTo(event->pos()), true))
             faceChanged();
     }
     _nodeState.setResizing(false);
+    _resize = ResizeGrab();
 
     QGraphicsObject::mouseReleaseEvent(event);
 
@@ -877,12 +935,16 @@ void NodeGraphicsObject::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
         }
     }
 
-    //NodeGeometry geometry(_nodeId, _graphModel, nodeScene());
-    AbstractNodeGeometry &geometry = nodeScene()->nodeGeometry();
-
-    if ((_graphModel.nodeFlags(_nodeId) | NodeFlag::Resizable)
-        && geometry.resizeHandleRect(_nodeId).contains(QPoint(pos.x(), pos.y()))) {
+    // CICADA (ADR-1958): the cursor names the side a press would drag. The test
+    // here used to OR the Resizable flag, which is always true, so every node
+    // showed the diagonal cursor at its corner.
+    ResizeGrab const grab = resizeGrabAt(pos);
+    if (grab.right && grab.bottom) {
         setCursor(QCursor(Qt::SizeFDiagCursor));
+    } else if (grab.right) {
+        setCursor(QCursor(Qt::SizeHorCursor));
+    } else if (grab.bottom) {
+        setCursor(QCursor(Qt::SizeVerCursor));
     } else {
         setCursor(QCursor());
     }
